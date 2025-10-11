@@ -6,7 +6,7 @@ export default function Home() {
     <main className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-r from-yellow-200 via-yellow-100 to-white px-6">
       {/* Header / Hero */}
       <section className="text-center max-w-2xl">
-        <h1 className="text-5xl font-extrabold text-black mb-4 ">
+        <h1 className="text-7xl font-extrabold text-black mb-4 ">
           Zenned
         </h1>
         <p className="text-lg text-gray-700 mb-8">
