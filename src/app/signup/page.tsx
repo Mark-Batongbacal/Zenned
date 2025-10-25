@@ -1,7 +1,9 @@
 "use client";
 import React, { useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function SignupPage() {
+    const router = useRouter();
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
@@ -26,12 +28,19 @@ export default function SignupPage() {
             if (!res.ok) {
                 setError(data.error || "Signup failed");
             } else {
+                // store userId returned by API so dashboard/events can use it
+                if (data.userId) {
+                    localStorage.setItem("userId", String(data.userId));
+                }
                 setSuccess("Signup successful!");
                 setEmail("");
                 setPassword("");
                 setConfirmPassword("");
+                // redirect to dashboard
+                router.push("/dashboard");
             }
         } catch (err) {
+            console.error(err);
             setError("Something went wrong. Please try again.");
         }
     };

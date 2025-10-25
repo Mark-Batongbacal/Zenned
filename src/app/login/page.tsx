@@ -1,7 +1,9 @@
 "use client";
 import React, { useState } from "react";
+import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
+    const router = useRouter();
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
@@ -21,10 +23,16 @@ export default function LoginPage() {
             if (!res.ok) {
                 setError(data.error || "Login failed");
             } else {
+                // store userId from login response
+                if (data.userId) {
+                    localStorage.setItem("userId", String(data.userId));
+                }
                 setSuccess("Login successful!");
-                // Optionally redirect or set auth state here
+                // redirect to dashboard
+                router.push("/dashboard");
             }
         } catch (err) {
+            console.error(err);
             setError("Something went wrong. Please try again.");
         }
     };
