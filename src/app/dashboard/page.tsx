@@ -222,12 +222,33 @@ export default function DashboardPage() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ prompt: quickText.trim() }),
             });
-            const data = await res.json();
+
+            // parse response body (try JSON first, fall back to raw text)
+            let payload: any;
+            const ct = res.headers.get("content-type") || "";
+            if (ct.includes("application/json")) {
+                payload = await res.json().catch(() => null);
+            } else {
+                const raw = await res.text().catch(() => null);
+                try { payload = raw ? JSON.parse(raw) : null; } catch { payload = raw; }
+            }
+
             if (!res.ok) {
-                console.error("AI schedule failed", data);
+                console.error("AI schedule failed:", { status: res.status, body: payload });
                 return;
             }
-            const aiText: string = data.text || "";
+
+            // normalize various shapes: { text }, { providerBody }, plain string, or nested raw
+            const aiText: string =
+                typeof payload === "string" ? payload :
+                (payload && (payload.text || payload.details || payload.providerBody || payload.raw)) ?
+                    (payload.text || payload.details || payload.providerBody || payload.raw) : "";
+
+            if (!aiText || !aiText.trim()) {
+                console.error("AI schedule returned empty text:", { payload });
+                return;
+            }
+
             const items = parseAiPlanToEvents(aiText);
 
             for (const it of items) {
@@ -238,7 +259,7 @@ export default function DashboardPage() {
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ userId, title: it.title, date: it.date }),
                         });
-                        const jr = await r.json().catch(()=>({}));
+                        const jr = await r.json().catch(() => ({}));
                         const newId = jr.insertedId ?? Date.now();
                         setEventsMap(prev => {
                             const copy = { ...(prev || {}) };
@@ -258,7 +279,7 @@ export default function DashboardPage() {
                 }
             }
         } catch (err) {
-            console.error(err);
+            console.error("importAiPlan unexpected error:", err);
         } finally {
             setQuickText("");
         }

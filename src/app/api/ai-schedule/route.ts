@@ -1,73 +1,176 @@
 import { NextResponse } from "next/server";
+import OpenAI from "openai";
+import util from "util";
+
+const systemPrompt =
+  `
+I have the following tasks with deadlines or priorities:
+
+{{task_list}}
+
+Today is {{today}}.
+
+Create a **7-day weekly schedule** in this format:
+
+'Sun/Slot1/Slot2/.../SlotN\\n' +
+'Mon/Slot1/Slot2/.../SlotN\\n' +
+'Tue/Slot1/Slot2/.../SlotN\\n' +
+'Wed/Slot1/Slot2/.../SlotN\\n' +
+'Thu/Slot1/Slot2/.../SlotN\\n' +
+'Fri/Slot1/Slot2/.../SlotN\\n' +
+'Sat/Slot1/Slot2/.../SlotN\\n'
+
+Rules:
+
+1. **Strictly preserve the format**: day, then slots separated by '/', each day ends with '\\n'. Do not change the template.
+2. Each day can have **any number of slots** (0, 1, 2, 5, etc.). Empty slots can be a single space or skipped (just keep '/' separators).
+3. Include creative scheduling: breaks, Pomodoro sessions, focus bursts, etc.
+4. Adapt to my style: I am a {{user_type}} (e.g., "night owl", "morning person", "locked-in focused").
+5. Prioritize tasks by urgency, deadlines, and complexity.
+6. Output **only the schedule string**, plain text, no explanations or bullet points.
+
+`;
+
+function collectStrings(v: any, out: string[] = []) {
+  if (v == null) return out;
+  if (typeof v === "string") {
+    if (v.trim()) out.push(v.trim());
+    return out;
+  }
+  if (typeof v === "number" || typeof v === "boolean") {
+    out.push(String(v));
+    return out;
+  }
+  if (Array.isArray(v)) {
+    for (const it of v) collectStrings(it, out);
+    return out;
+  }
+  if (typeof v === "object") {
+    // common keys that may hold text
+    if (typeof v.text === "string" && v.text.trim()) out.push(v.text.trim());
+    if (typeof v.content === "string" && v.content.trim()) out.push(v.content.trim());
+    if (typeof v.output_text === "string" && v.output_text.trim()) out.push(v.output_text.trim());
+    // try nested keys/fields
+    for (const key of Object.keys(v)) {
+      if (["text","content","output_text"].includes(key)) continue;
+      collectStrings(v[key], out);
+    }
+    return out;
+  }
+  return out;
+}
+
+function extractTextFromSdkResponse(resp: any) {
+  // try choices -> message -> content etc
+  try {
+    if (!resp) return "";
+    const texts: string[] = [];
+
+    if (Array.isArray(resp.choices) && resp.choices.length) {
+      for (const choice of resp.choices) {
+        // choice.text (OpenAI legacy)
+        if (typeof choice.text === "string" && choice.text.trim()) texts.push(choice.text.trim());
+
+        // choice.message
+        if (choice.message) {
+          // message.content may be string/array/object
+          collectStrings(choice.message.content, texts);
+          // if message itself has fields
+          collectStrings(choice.message, texts);
+        }
+
+        // other potential fields on choice
+        collectStrings(choice, texts);
+      }
+    }
+
+    // NVIDIA shapes: outputs -> content
+    if (Array.isArray(resp.outputs)) {
+      for (const out of resp.outputs) {
+        collectStrings(out.content, texts);
+        collectStrings(out, texts);
+      }
+    }
+
+    // fallback generic search
+    collectStrings(resp, texts);
+
+    // join unique non-empty pieces preserving order
+    const joined = texts.map(s => s.trim()).filter(Boolean);
+    if (!joined.length) return "";
+    // remove duplicates while preserving order
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const t of joined) {
+      if (!seen.has(t)) {
+        unique.push(t);
+        seen.add(t);
+      }
+    }
+    return unique.join("\n").trim();
+  } catch (e) {
+    console.debug("[ai-schedule] extractTextFromSdkResponse error:", String(e));
+    return "";
+  }
+}
 
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => null);
+  console.debug("[ai-schedule] incoming request");
+  const bodyRaw = await req.text().catch(() => "");
+  console.debug("[ai-schedule] raw body:", bodyRaw);
+  const body = (() => {
+    try {
+      return bodyRaw ? JSON.parse(bodyRaw) : null;
+    } catch {
+      return { raw: bodyRaw };
+    }
+  })();
+  console.debug("[ai-schedule] parsed body:", util.inspect(body, { depth: 2 }));
+
   const prompt = body?.prompt;
   if (!prompt) return NextResponse.json({ error: "prompt required" }, { status: 400 });
 
-  // use either NVIDIA key or OPENAI key from env (do NOT hardcode keys)
-  const apiKey = process.env.NVIDIA_API_KEY || process.env.OPENAI_API_KEY;
-  if (!apiKey) return NextResponse.json({ error: "server missing API key (set NVIDIA_API_KEY or OPENAI_API_KEY)" }, { status: 500 });
+  const apiKey = process.env.NVIDIA_API_KEY || "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";
+  if (!apiKey) {
+    console.error("[ai-schedule] missing NVIDIA_API_KEY");
+    return NextResponse.json(
+      { error: "server missing NVIDIA_API_KEY", hint: "set NVIDIA_API_KEY in .env.local and restart" },
+      { status: 500 }
+    );
+  }
 
-  // base URL for NVIDIA Integrate (can be overridden via env)
-  const baseURL = process.env.NVIDIA_API_BASE || "https://integrate.api.nvidia.com/v1";
-  const endpoint = `${baseURL.replace(/\/$/, "")}/chat/completions`;
-
-  // strict system prompt: model must output exactly the 7-line template
-  const systemPrompt =
-    "Output a 7-line weekly schedule using this exact template and nothing else (plain text, no bullets):\n" +
-    "Sun/Task (Details) 1:00pm-2:00pm/Rest 2:00-2:30/Task (Details) 2:30-3:30\n" +
-    "Mon/ / /\nTue/ / /\nWed/ / /\nThu/ / /\nFri/ / /\nSat/ / /\n" +
-    "Only use that format. Do not add explanation.";
+  const client = new OpenAI({
+    apiKey,
+    baseURL: process.env.NVIDIA_API_BASE || "https://integrate.api.nvidia.com/v1",
+  });
 
   try {
-    const resp = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: prompt }
-        ],
-        temperature: 0,
-        max_tokens: 800,
-        top_p: 0.95,
-      }),
+    const resp = await client.chat.completions.create({
+      model: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0,
+      top_p: 0.95,
+      max_tokens: 800,
+      stream: false,
     });
 
-    const raw = await resp.text();
+    // debug: inspect the full SDK object
+    console.debug("[ai-schedule] raw SDK resp:", util.inspect(resp, { depth: 4 }));
 
-    if (!resp.ok) {
-      // surface remote body to server log for debugging, return helpful client error
-      console.error("AI provider non-OK response:", resp.status, raw);
-      return NextResponse.json({ error: "AI provider returned error", details: raw }, { status: 502 });
+    const extracted = extractTextFromSdkResponse(resp);
+    console.debug("[ai-schedule] extracted text:", util.inspect(extracted, { depth: 2 }));
+
+    if (!extracted) {
+      console.error("AI returned empty response (SDK):", util.inspect(resp, { depth: 2 }));
+      return NextResponse.json({ error: "AI returned empty response", raw: resp }, { status: 502 });
     }
 
-    // Try parse JSON, fallback to raw text
-    let text = "";
-    try {
-      const json = JSON.parse(raw);
-      // OpenAI-compatible shape: choices[0].message.content
-      text = (json?.choices?.[0]?.message?.content) || (json?.choices?.[0]?.text) || "";
-      if (!text && typeof json === "string") text = json;
-    } catch (e) {
-      // not JSON — use raw text
-      text = raw;
-    }
-
-    // final sanity: ensure we return something
-    if (!text) {
-      console.error("AI provider returned empty response body");
-      return NextResponse.json({ error: "AI returned empty response" }, { status: 502 });
-    }
-
-    return NextResponse.json({ text });
+    return NextResponse.json({ text: extracted, provider: "nvidia" });
   } catch (err: any) {
-    console.error("ai-schedule error:", err);
-    return NextResponse.json({ error: err?.message || "AI error" }, { status: 500 });
+    console.error("ai-schedule nvidia sdk error:", err);
+    return NextResponse.json({ error: err?.message || "AI error", details: String(err) }, { status: 500 });
   }
 }
