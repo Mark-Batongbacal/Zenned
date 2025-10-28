@@ -10,7 +10,7 @@ I have the following tasks with deadlines or priorities:
 
 Today is {{today}}.
 
-Create a **7-day weekly schedule** in this format:
+Create a **7-day weekly schedule** strictly in this format:
 
 'Sun/Slot1/Slot2/.../SlotN\\n' +
 'Mon/Slot1/Slot2/.../SlotN\\n' +
@@ -20,6 +20,10 @@ Create a **7-day weekly schedule** in this format:
 'Fri/Slot1/Slot2/.../SlotN\\n' +
 'Sat/Slot1/Slot2/.../SlotN\\n'
 
+Example:
+'Sun/Review (30 minutes)/Pomodoro Break (5 minutes)/Review (30 minutes)/ Pomodoro Break (5 minutes)' +
+'Mon/ / / / \\n'
+
 Rules:
 
 1. **Strictly preserve the format**: day, then slots separated by '/', each day ends with '\\n'. Do not change the template.
@@ -28,6 +32,12 @@ Rules:
 4. Adapt to my style: I am a {{user_type}} (e.g., "night owl", "morning person", "locked-in focused").
 5. Prioritize tasks by urgency, deadlines, and complexity.
 6. Output **only the schedule string**, plain text, no explanations or bullet points.
+7. Do not include the reasoning. Only give the schedule output.
+8. Make sure that it is in this format exactly, no deviations
+9. Make sure that the output follows the exact punctuations such as /, ' and + as shown in the format above.
+10. **MAKE SURE TO FOLLOW THE FORMAT**
+11. **DO NOT USE DAYS OF THE WEEK THAT ARE NOT MENTIONED**
+12. Take note of the abbreviations of the days of the week (mon, tues, wed, thurs, fri, sun, sat)
 
 `;
 
@@ -127,7 +137,7 @@ export async function POST(req: Request) {
   })();
   console.debug("[ai-schedule] parsed body:", util.inspect(body, { depth: 2 }));
 
-  const prompt = body?.prompt;
+  const prompt = body?.prompt + "DO NOT USE QUOTATIONS PLEASE, do not repeat \\n's and follow the exact format mentioned.";
   if (!prompt) return NextResponse.json({ error: "prompt required" }, { status: 400 });
 
   const apiKey = process.env.NVIDIA_API_KEY || "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";

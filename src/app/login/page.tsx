@@ -25,9 +25,10 @@ export default function LoginPage() {
             } else {
                 // store userId from login response
                 if (data.userId) {
-                    localStorage.setItem("userId", String(data.userId));
+                    console.debug("Storing userId:", data.userId);
                 }
                 setSuccess("Login successful!");
+                console.debug("Storing userId:", data.userId);
                 // redirect to dashboard
                 router.push("/dashboard");
             }

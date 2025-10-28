@@ -1,123 +1,196 @@
 "use client";
+
 import React, { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
 
-type EventItem = { id: number; title: string; event_date: string };
+type Event = {
+  id: number;
+  title: string;
+  date: string;
+  time?: string;
+};
 
 export default function DayLandingPage() {
-    const params = useParams();
-    const router = useRouter();
-    const date = Array.isArray(params.date) ? params.date[0] : (params.date || "");
-    const [events, setEvents] = useState<EventItem[]>([]);
-    const [newTitle, setNewTitle] = useState("");
-    const [userId, setUserId] = useState<number | null>(null);
-    const normalizedDate = date;
+  const router = useRouter();
+  const params = useParams();
+  const date = params?.date as string;
 
-    useEffect(() => {
+  const [events, setEvents] = useState<Event[]>([]);
+  const [userId, setUserId] = useState<number | null>(() => {
+    try {
+      const uid = localStorage.getItem("userId");
+      return uid ? Number(uid) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Modal state
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [eventToDelete, setEventToDelete] = useState<Event | null>(null);
+
+  useEffect(() => {
+    const loadEvents = async () => {
+      if (!date) return;
+
+      if (userId) {
         try {
-            const uid = localStorage.getItem("userId");
-            setUserId(uid ? Number(uid) : null);
-        } catch {
-            setUserId(null);
+          const res = await fetch(`/api/events?userId=${userId}`);
+          if (!res.ok) {
+            console.error("Failed to fetch events:", await res.text());
+            return;
+          }
+          const allEvents: { id: number; title: string; event_date: string }[] =
+            await res.json();
+          const filtered = allEvents
+            .filter((e) => e.event_date.slice(0, 10) === date)
+            .map((e) => ({
+              id: e.id,
+              title: e.title,
+              date: e.event_date.slice(0, 10),
+            }));
+          setEvents(filtered);
+        } catch (err) {
+          console.error("Error loading day events:", err);
         }
-    }, []);
-
-    useEffect(() => {
-        const fetchForDate = async () => {
-            if (!userId) return;
-            try {
-                const res = await fetch(`/api/events?userId=${userId}`);
-                if (!res.ok) return;
-                const rows: EventItem[] = await res.json();
-                const filtered = rows.filter(r => {
-                    const d = (r.event_date || "").slice(0, 10);
-                    return d === normalizedDate;
-                });
-                setEvents(filtered);
-            } catch (e) {
-                console.error(e);
-            }
-        };
-
-        fetchForDate();
-    }, [userId, normalizedDate]);
-
-    const handleAdd = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!newTitle.trim()) return;
-        const title = newTitle.trim();
-        if (userId) {
-            try {
-                const res = await fetch("/api/events", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ userId, title, date: normalizedDate }),
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    const id = data.insertedId ?? Date.now();
-                    setEvents(prev => [...prev, { id, title, event_date: normalizedDate }]);
-                    setNewTitle("");
-                } else {
-                    console.error("Add failed", data);
-                }
-            } catch (err) {
-                console.error(err);
-            }
-        } else {
-            // local fallback
-            const id = Date.now();
-            setEvents(prev => [...prev, { id, title, event_date: normalizedDate }]);
-            setNewTitle("");
-            // also persist to localStorage map used by dashboard
-            try {
-                const raw = localStorage.getItem("events");
-                const map = raw ? JSON.parse(raw) : {};
-                map[normalizedDate] = map[normalizedDate] ? [...map[normalizedDate], { id, title, date: normalizedDate }] : [{ id, title, date: normalizedDate }];
-                localStorage.setItem("events", JSON.stringify(map));
-            } catch {}
+      } else {
+        try {
+          const raw = localStorage.getItem("events");
+          if (raw) {
+            const map = JSON.parse(raw) as Record<string, Event[]>;
+            setEvents(map[date] || []);
+          }
+        } catch (err) {
+          console.error("Error loading local events:", err);
         }
+      }
     };
 
-    return (
-        <div className="min-h-screen flex items-start justify-center bg-gradient-to-r from-yellow-200 via-yellow-100 to-white p-8">
-            <div className="w-full max-w-2xl bg-white rounded-xl shadow-lg p-6">
-                <div className="flex items-center justify-between mb-4">
-                    <h1 className="text-2xl font-bold text-black">Landing — {normalizedDate}</h1>
-                    <div className="flex gap-2">
-                        <Link href="/dashboard" className="px-3 py-1 bg-gray-100 rounded text-gray-800">Back</Link>
-                        <button onClick={() => router.push(`/dashboard/day/${normalizedDate}`)} className="px-3 py-1 bg-yellow-400 rounded text-black">
-                            Open Day Details
-                        </button>
-                    </div>
-                </div>
+    loadEvents();
+  }, [date, userId]);
 
-                <p className="mb-4 text-sm text-gray-800">Quick summary for the selected day. Add an event below or open the full day view.</p>
+  // Delete function
+  const handleDelete = async () => {
+    if (!eventToDelete) return;
 
-                <form onSubmit={handleAdd} className="flex gap-2 mb-4">
-                    <input
-                        value={newTitle}
-                        onChange={e => setNewTitle(e.target.value)}
-                        placeholder="Event name (no time required)"
-                        className="flex-1 px-4 py-2 border rounded text-gray-900"
-                    />
-                    <button type="submit" className="px-4 py-2 bg-yellow-400 rounded text-black">Add</button>
-                </form>
+    try {
+      if (userId) {
+        const res = await fetch("/api/events", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId, id: eventToDelete.id }),
+        });
+        if (!res.ok) {
+          console.error("Failed to delete event:", await res.text());
+          return;
+        }
+      } else {
+        const raw = localStorage.getItem("events");
+        if (raw) {
+          const map = JSON.parse(raw);
+          if (map[date]) {
+            map[date] = map[date].filter((e: Event) => e.id !== eventToDelete.id);
+            localStorage.setItem("events", JSON.stringify(map));
+          }
+        }
+      }
 
-                <h2 className="text-lg font-semibold mb-2 text-gray-900">Events ({events.length})</h2>
-                {events.length === 0 ? (
-                    <p className="text-gray-700">No events for this day.</p>
-                ) : (
-                    <ul className="space-y-2">
-                        {events.map(ev => (
-                            <li key={ev.id} className="p-3 border rounded flex justify-between items-center">
-                                <div className="text-gray-900">{ev.title}</div>
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </div>
+      setEvents((prev) => prev.filter((e) => e.id !== eventToDelete.id));
+      setConfirmOpen(false);
+      setEventToDelete(null);
+    } catch (err) {
+      console.error("Delete failed:", err);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col items-center bg-gradient-to-r from-yellow-100 via-yellow-50 to-white px-6 py-10 text-gray-900">
+      <div className="w-full max-w-3xl">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-3xl font-bold text-black">Events for {date}</h1>
+          <button
+            onClick={() => router.push("/dashboard")}
+            className="px-4 py-2 bg-gray-800 text-white rounded"
+          >
+            Back to Calendar
+          </button>
         </div>
-    );
+
+        <div className="bg-white shadow-md rounded-lg p-6">
+          {events.length === 0 ? (
+            <p className="text-gray-600 text-center">No events for this day.</p>
+          ) : (
+            <ul className="space-y-3">
+              {events.map((ev) => (
+                <li
+                  key={`${ev.id}-${ev.title}-${ev.date}`}
+                  className="p-4 border rounded-lg bg-yellow-50 hover:bg-yellow-100 transition flex justify-between items-center"
+                >
+                  <div>
+                    <span className="text-lg font-semibold text-gray-900">
+                      {ev.title}
+                    </span>
+                    {ev.time && (
+                      <span className="ml-2 text-sm text-gray-600">
+                        {ev.time}
+                      </span>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setEventToDelete(ev);
+                      setConfirmOpen(true);
+                    }}
+                    className="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600"
+                  >
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      {/* 🔔 Delete confirmation modal */}
+      {confirmOpen && eventToDelete && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          onClick={() => setConfirmOpen(false)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-lg w-96 p-6 relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-xl font-semibold mb-3 text-gray-900">
+              Delete Event
+            </h2>
+            <p className="text-gray-700 mb-6">
+              Are you sure you want to delete{" "}
+              <span className="font-semibold text-black">
+                "{eventToDelete.title}"
+              </span>
+              ?
+            </p>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setConfirmOpen(false)}
+                className="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDelete}
+                className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

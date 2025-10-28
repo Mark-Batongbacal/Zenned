@@ -50,6 +50,8 @@ export async function GET(req: Request) {
   }
 }
 
+
+
 export async function POST(req: Request) {
   let body;
   try {
@@ -87,6 +89,55 @@ export async function POST(req: Request) {
     return NextResponse.json({ insertedId: result.insertId });
   } catch (err: any) {
     console.error(err);
+    return NextResponse.json({ error: err.message || "Server error" }, { status: 500 });
+  } finally {
+    if (conn) await conn.end().catch(() => {});
+  }
+}
+
+export async function DELETE(req: Request) {
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const { userId, id } = body || {};
+  const uid = userId ? Number(userId) : null;
+  const eventId = id ? Number(id) : null;
+
+  if (!uid || !eventId) {
+    return NextResponse.json(
+      { error: "userId and id required" },
+      { status: 400 }
+    );
+  }
+
+  let conn;
+  try {
+    conn = await getConnection();
+    const tableName = `events_user_${uid}`;
+
+    if (!/^[A-Za-z0-9_]+$/.test(tableName)) {
+      return NextResponse.json({ error: "Invalid userId" }, { status: 400 });
+    }
+
+    const [result]: any = await conn.execute(
+      `DELETE FROM \`${tableName}\` WHERE id = ?`,
+      [eventId]
+    );
+
+    if (result.affectedRows === 0) {
+      return NextResponse.json(
+        { error: "Event not found or already deleted" },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (err: any) {
+    console.error("Error deleting event:", err);
     return NextResponse.json({ error: err.message || "Server error" }, { status: 500 });
   } finally {
     if (conn) await conn.end().catch(() => {});
