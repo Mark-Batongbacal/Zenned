@@ -10,33 +10,46 @@ export default function LoginPage() {
     const [success, setSuccess] = useState("");
 
     const handleLogin = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setError("");
-        setSuccess("");
-        try {
-            const res = await fetch("/api/login", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email, password }),
-            });
-            const data = await res.json();
-            if (!res.ok) {
-                setError(data.error || "Login failed");
-            } else {
-                // store userId from login response
-                if (data.userId) {
-                    console.debug("Storing userId:", data.userId);
-                }
-                setSuccess("Login successful!");
-                console.debug("Storing userId:", data.userId);
-                // redirect to dashboard
-                router.push("/dashboard");
-            }
-        } catch (err) {
-            console.error(err);
-            setError("Something went wrong. Please try again.");
+    e.preventDefault();
+    setError("");
+    setSuccess("");
+
+    try {
+        const res = await fetch("/api/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password }),
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            setError(data.error || "Login failed");
+            return;
         }
-    };
+
+        // Make sure userId exists in response
+        if (!data.userId) {
+            setError("Login failed: no userId returned");
+            return;
+        }
+
+        // Store userId in localStorage
+        localStorage.setItem("userId", data.userId);
+        console.debug("Stored userId:", data.userId);
+
+        setSuccess("Login successful!");
+
+        // Redirect to dashboard and refresh to ensure dashboard reads latest userId
+        router.push("/dashboard");
+        router.refresh();
+
+    } catch (err) {
+        console.error(err);
+        setError("Something went wrong. Please try again.");
+    }
+};
+
 
     return (
         <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-r from-yellow-200 via-yellow-100 to-white px-6">

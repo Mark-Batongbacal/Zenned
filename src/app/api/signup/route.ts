@@ -42,6 +42,8 @@ export async function POST(req: Request) {
          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
          title VARCHAR(255) NOT NULL,
          event_date DATE NOT NULL,
+         start_time TIME NULL,
+         end_time TIME NULL,
          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
     );

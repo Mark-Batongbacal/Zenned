@@ -7,6 +7,8 @@ type Event = {
     title: string;
     date: string;
     time?: string;
+    start_time?: string;
+    end_time?: string;
 };
 
 export default function DashboardPage() {
@@ -190,29 +192,40 @@ export default function DashboardPage() {
     };
 
     const parseAiPlanToEvents = (text: string) => {
-        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-        const parsed: { date: string, title: string }[] = [];
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const parsed: { date: string, title: string, start_time: string, end_time: string }[] = [];
 
-        for (const line of lines) {
-            const parts = line.split("/");
-            if (parts.length < 2) continue;
-            const dayLabel = parts[0].slice(0,3);
-            const weekday = dayNameToIndex[dayLabel];
-            if (weekday === undefined) continue;
-            const dateStr = nextDateForWeekday(weekday);
+    for (const line of lines) {
+        const parts = line.split("/");
+        if (parts.length < 2) continue;
 
-            for (let i = 1; i < parts.length; i++) {
-                let seg = parts[i].trim();
-                if (!seg) continue;
-                seg = seg.replace(/\s*\d{1,2}:\d{2}\s*(am|pm)?\s*-\s*\d{1,2}:\d{2}\s*(am|pm)?/i, "").trim();
-                seg = seg.replace(/\s*\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}/, "").trim();
-                if (!seg) continue;
-                parsed.push({ date: dateStr, title: seg });
-            }
+        const dayLabel = parts[0].slice(0, 3);
+        const weekday = dayNameToIndex[dayLabel];
+        if (weekday === undefined) continue;
+
+        const dateStr = nextDateForWeekday(weekday);
+
+        for (let i = 1; i < parts.length; i++) {
+            const seg = parts[i].trim();
+            if (!seg) continue;
+
+            // Match "Title (HH:MM-HH:MM)"
+            const match = seg.match(/(.+?)\s*\((\d{2}:\d{2})-(\d{2}:\d{2})\)/);
+            if (!match) continue;
+
+            const [, title, start_time, end_time] = match;
+            parsed.push({
+                date: dateStr,
+                title: title.trim(),
+                start_time,
+                end_time
+            });
         }
+    }
 
-        return parsed;
-    };
+    return parsed;
+};
+
 
     const importAiPlan = async () => {
         if (!quickText.trim()) return;
@@ -254,23 +267,42 @@ export default function DashboardPage() {
             
 
             for (const it of items) {
-                if (userId) {
-                    try {
-                        const r = await fetch("/api/events", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ userId, title: it.title, date: it.date }),
-                        });
-                        const jr = await r.json().catch(() => ({}));
-                        const newId = jr.insertedId ?? Date.now();
-                        setEventsMap(prev => {
-                            const copy = { ...(prev || {}) };
-                            copy[it.date] = copy[it.date] ? [...copy[it.date], { id: newId, title: it.title, date: it.date }] : [{ id: newId, title: it.title, date: it.date }];
-                            return copy;
-                        });
-                    } catch (err) {
-                        console.error("failed to POST event", err);
-                    }
+            if (userId) {
+                try {
+                    const r = await fetch("/api/events", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ 
+                            userId, 
+                            title: it.title, 
+                            date: it.date,
+                            startTime: it.start_time,
+                            endTime: it.end_time
+                        }),
+                    });
+                    const jr = await r.json().catch(() => ({}));
+                    const newId = jr.insertedId ?? Date.now();
+                    setEventsMap(prev => {
+                        const copy = { ...(prev || {}) };
+                        copy[it.date] = copy[it.date] ? [...copy[it.date], { 
+                            id: newId, 
+                            title: it.title, 
+                            date: it.date,
+                            start_time: it.start_time,
+                            end_time: it.end_time
+                        }] : [{ 
+                            id: newId, 
+                            title: it.title, 
+                            date: it.date,
+                            start_time: it.start_time,
+                            end_time: it.end_time
+                        }];
+                        return copy;
+                    });
+                } catch (err) {
+                    console.error("failed to POST event", err);
+                }
+            
                 } else {
                     const ev: Event = { id: Date.now(), title: it.title, date: it.date };
                     setEventsMap(prev => {

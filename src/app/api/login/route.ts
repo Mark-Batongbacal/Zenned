@@ -27,6 +27,6 @@ export async function POST(req: Request) {
 
   if (!isValid)
     return NextResponse.json({ error: "Invalid password" }, { status: 401 });
-
-  return NextResponse.json({ message: "Login successful" });
+  
+  return NextResponse.json({ userId: user.id, message: "Login successful" });
 }

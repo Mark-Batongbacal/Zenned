@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import util from "util";
 
-const systemPrompt =
-  `
+const systemPrompt = `
 I have the following tasks with deadlines or priorities:
 
 {{task_list}}
@@ -12,34 +11,23 @@ Today is {{today}}.
 
 Create a **7-day weekly schedule** strictly in this format:
 
-'Sun/Slot1/Slot2/.../SlotN\\n' +
-'Mon/Slot1/Slot2/.../SlotN\\n' +
-'Tue/Slot1/Slot2/.../SlotN\\n' +
-'Wed/Slot1/Slot2/.../SlotN\\n' +
-'Thu/Slot1/Slot2/.../SlotN\\n' +
-'Fri/Slot1/Slot2/.../SlotN\\n' +
-'Sat/Slot1/Slot2/.../SlotN\\n'
-
-Example:
-'Sun/Review (30 minutes)/Pomodoro Break (5 minutes)/Review (30 minutes)/ Pomodoro Break (5 minutes)' +
-'Mon/ / / / \\n'
+'Sun/Slot1 (HH:MM-HH:MM)/Slot2 (HH:MM-HH:MM)/.../SlotN (HH:MM-HH:MM)\\n' +
+'Mon/Slot1 (HH:MM-HH:MM)/Slot2 (HH:MM-HH:MM)/.../SlotN (HH:MM-HH:MM)\\n' +
+'Tue/Slot1 (HH:MM-HH:MM)/Slot2 (HH:MM-HH:MM)/.../SlotN (HH:MM-HH:MM)\\n' +
+... etc for Wed, Thu, Fri, Sat
 
 Rules:
-
-1. **Strictly preserve the format**: day, then slots separated by '/', each day ends with '\\n'. Do not change the template.
-2. Each day can have **any number of slots** (0, 1, 2, 5, etc.). Empty slots can be a single space or skipped (just keep '/' separators).
+1. Include a **start and end time for every slot**, in 24-hour format HH:MM-HH:MM.
+2. Empty slots can be a single space or skipped (keep '/' separators).
 3. Include creative scheduling: breaks, Pomodoro sessions, focus bursts, etc.
-4. Adapt to my style: I am a {{user_type}} (e.g., "night owl", "morning person", "locked-in focused").
+4. Adapt to my style: I am a {{user_type}} (e.g., "night owl", "morning person").
 5. Prioritize tasks by urgency, deadlines, and complexity.
-6. Output **only the schedule string**, plain text, no explanations or bullet points.
-7. Do not include the reasoning. Only give the schedule output.
-8. Make sure that it is in this format exactly, no deviations
-9. Make sure that the output follows the exact punctuations such as /, ' and + as shown in the format above.
-10. **MAKE SURE TO FOLLOW THE FORMAT**
-11. **DO NOT USE DAYS OF THE WEEK THAT ARE NOT MENTIONED**
-12. Take note of the abbreviations of the days of the week (mon, tues, wed, thurs, fri, sun, sat)
-
+6. Output **only the schedule string**, plain text, no explanations.
+7. Strictly follow the format: day first, then slots, with '/' separators, ending each day with '\\n'.
+8. DO NOT USE DAYS NOT MENTIONED.
+9. DO NOT REPEAT '\\n' or quotes.
 `;
+
 
 function collectStrings(v: any, out: string[] = []) {
   if (v == null) return out;
