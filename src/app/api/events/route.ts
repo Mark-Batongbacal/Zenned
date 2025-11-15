@@ -38,12 +38,16 @@ export async function GET(req: Request) {
          event_date DATE NOT NULL,
          start_time TIME DEFAULT NULL,
          end_time TIME DEFAULT NULL,
+         completed TINYINT(1) NOT NULL DEFAULT 0,
          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
     );
+    await conn.execute(
+      `ALTER TABLE \`${tableName}\` ADD COLUMN completed TINYINT(1) NOT NULL DEFAULT 0`,
+    ).catch(() => {});
 
     const [rows]: any = await conn.execute(
-      `SELECT id, title, event_date, start_time, end_time FROM \`${tableName}\` ORDER BY event_date, start_time, id`
+      `SELECT id, title, event_date, start_time, end_time, completed FROM \`${tableName}\` ORDER BY event_date, start_time, id`
     );
     return NextResponse.json(rows);
   } catch (err: any) {
@@ -62,12 +66,19 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { userId, id, start_time, end_time } = body || {};
+  const { userId, id, start_time, end_time, completed } = body || {};
   const uid = userId ? Number(userId) : null;
   const eventId = id ? Number(id) : null;
 
-  if (!uid || !eventId || !start_time || !end_time) {
-    return NextResponse.json({ error: "userId, id, start_time and end_time required" }, { status: 400 });
+  if (!uid || !eventId) {
+    return NextResponse.json({ error: "userId and id required" }, { status: 400 });
+  }
+
+  const hasStart = start_time !== undefined;
+  const hasEnd = end_time !== undefined;
+  const hasCompleted = completed !== undefined;
+  if (!hasStart && !hasEnd && !hasCompleted) {
+    return NextResponse.json({ error: "No fields to update" }, { status: 400 });
   }
 
   let conn;
@@ -78,9 +89,24 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ error: "Invalid userId" }, { status: 400 });
     }
 
+    const updates: string[] = [];
+    const params: any[] = [];
+    if (hasStart) {
+      updates.push("start_time = ?");
+      params.push(start_time ?? null);
+    }
+    if (hasEnd) {
+      updates.push("end_time = ?");
+      params.push(end_time ?? null);
+    }
+    if (hasCompleted) {
+      updates.push("completed = ?");
+      params.push(completed ? 1 : 0);
+    }
+
     const [result]: any = await conn.execute(
-      `UPDATE \`${tableName}\` SET start_time = ?, end_time = ? WHERE id = ?`,
-      [start_time, end_time, eventId]
+      `UPDATE \`${tableName}\` SET ${updates.join(", ")} WHERE id = ?`,
+      [...params, eventId]
     );
 
     if (result.affectedRows === 0) {
@@ -105,7 +131,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { userId, title, date, startTime, endTime } = body || {};
+  const { userId, title, date, startTime, endTime, completed } = body || {};
   const uid = userId ? Number(userId) : null;
   if (!uid || !title || !date) return NextResponse.json({ error: "userId, title, and date required" }, { status: 400 });
 
@@ -124,13 +150,17 @@ export async function POST(req: Request) {
          event_date DATE NOT NULL,
          start_time TIME DEFAULT NULL,
          end_time TIME DEFAULT NULL,
+         completed TINYINT(1) NOT NULL DEFAULT 0,
          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
     );
+    await conn.execute(
+      `ALTER TABLE \`${tableName}\` ADD COLUMN completed TINYINT(1) NOT NULL DEFAULT 0`,
+    ).catch(() => {});
 
     const [result]: any = await conn.execute(
-      `INSERT INTO \`${tableName}\` (title, event_date, start_time, end_time) VALUES (?, ?, ?, ?)`,
-      [String(title).slice(0, 255), date, startTime ?? null, endTime ?? null]
+      `INSERT INTO \`${tableName}\` (title, event_date, start_time, end_time, completed) VALUES (?, ?, ?, ?, ?)`,
+      [String(title).slice(0, 255), date, startTime ?? null, endTime ?? null, completed ? 1 : 0]
     );
 
     return NextResponse.json({ insertedId: result.insertId });
@@ -183,4 +213,3 @@ export async function DELETE(req: Request) {
     if (conn) await conn.end().catch(() => {});
   }
 }
-

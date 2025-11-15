@@ -17,10 +17,24 @@ function getConnOptions() {
 export async function POST(req: Request) {
   let connection;
   try {
-    const { email, password } = await req.json();
+    const { email, password, name } = await req.json();
     if (!email || !password) return NextResponse.json({ error: "Missing fields" }, { status: 400 });
 
     connection = await mysql.createConnection(getConnOptions());
+
+    // Ensure table and name column exist (safe if already present)
+    await connection
+      .execute(
+        `CREATE TABLE IF NOT EXISTS users (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+          email VARCHAR(255) NOT NULL UNIQUE,
+          name VARCHAR(255) NULL,
+          password_hash VARCHAR(255) NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+      )
+      .catch(() => {});
+    await connection.execute("ALTER TABLE users ADD COLUMN name VARCHAR(255) NULL", []).catch(() => {});
 
     const [rows]: any = await connection.execute("SELECT id FROM users WHERE email = ?", [email]);
     if (Array.isArray(rows) && rows.length > 0) {
@@ -29,7 +43,11 @@ export async function POST(req: Request) {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const [insertResult]: any = await connection.execute("INSERT INTO users (email, password_hash) VALUES (?, ?)", [email, hashedPassword]);
+    const cleanName = name ? String(name).slice(0, 255) : null;
+    const [insertResult]: any = await connection.execute(
+      "INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)",
+      [email, cleanName, hashedPassword]
+    );
     const userId = insertResult && insertResult.insertId;
     if (!userId) {
       await connection.end();
@@ -44,12 +62,16 @@ export async function POST(req: Request) {
          event_date DATE NOT NULL,
          start_time TIME NULL,
          end_time TIME NULL,
+         completed TINYINT(1) NOT NULL DEFAULT 0,
          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
     );
+    await connection.execute(
+      `ALTER TABLE \`${tableName}\` ADD COLUMN completed TINYINT(1) NOT NULL DEFAULT 0`
+    ).catch(() => {});
 
     await connection.end();
-    return NextResponse.json({ message: "User registered successfully", userId });
+    return NextResponse.json({ message: "User registered successfully", userId, name: cleanName });
   } catch (error: any) {
     console.error(error);
     if (connection) await connection.end().catch(() => {});

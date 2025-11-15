@@ -1,6 +1,19 @@
 "use client";
-import React, { useMemo, useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import React, { useMemo, useState, useEffect, useCallback } from "react";
+import { useRouter, usePathname } from "next/navigation";
+import {
+    Calendar as CalendarIcon,
+    LayoutList,
+    FileText,
+    ListChecks,
+    Settings,
+    Search,
+    ChevronLeft,
+    ChevronRight,
+    ChevronDown,
+    Plus,
+    Sparkles
+} from "lucide-react";
 
 type Event = {
     id: number;
@@ -9,26 +22,91 @@ type Event = {
     time?: string;
     start_time?: string;
     end_time?: string;
+    completed?: boolean;
 };
 
 export default function DashboardPage() {
     const router = useRouter();
+    const pathname = usePathname();
     const today = new Date();
 
     const [currentMonth, setCurrentMonth] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
-    const [quickText, setQuickText] = useState("");
+    const [aiPrompt, setAiPrompt] = useState("");
     const [eventsMap, setEventsMap] = useState<Record<string, Event[]>>({});
     const [selectedDate, setSelectedDate] = useState<string | null>(null);
-
-    // load userId from localStorage synchronously (client component)
-    const [userId, setUserId] = useState<number | null>(() => {
-        try {
-            const uid = localStorage.getItem("userId");
-            return uid ? Number(uid) : null;
-        } catch {
-            return null;
-        }
+    const [viewMode, setViewMode] = useState<"Day" | "Week" | "Month">("Month");
+    const [isAddModalOpen, setAddModalOpen] = useState(false);
+    const [isAiModalOpen, setAiModalOpen] = useState(false);
+    const [addEventError, setAddEventError] = useState("");
+    const [newEventData, setNewEventData] = useState<{
+        title: string;
+        date: string;
+        startTime: string;
+        endTime: string;
+        category: string;
+        description: string;
+    }>({
+        title: "",
+        date: "",
+        startTime: "",
+        endTime: "",
+        category: "Work",
+        description: "",
     });
+
+    // load persisted user details once we're on the client
+    const [userId, setUserId] = useState<number | null>(null);
+    const [userName, setUserName] = useState<string | null>(null);
+
+    const cacheKeyForUser = useCallback((uid?: number | null) => {
+        return uid ? `events_cache_${uid}` : "events_local";
+    }, []);
+
+    const persistEvents = useCallback(
+        (map: Record<string, Event[]>, uid?: number | null) => {
+            if (typeof window === "undefined") return;
+            try {
+                const key = cacheKeyForUser(typeof uid === "number" ? uid : userId);
+                localStorage.setItem(key, JSON.stringify(map));
+                if (!uid) {
+                    localStorage.setItem("events", JSON.stringify(map));
+                }
+            } catch (err) {
+                console.error("Failed to persist events cache", err);
+            }
+        },
+        [cacheKeyForUser, userId]
+    );
+
+    useEffect(() => {
+        try {
+            const storedId = localStorage.getItem("userId");
+            setUserId(storedId ? Number(storedId) : null);
+            const storedName = localStorage.getItem("userName");
+            setUserName(storedName ? String(storedName) : null);
+        } catch (err) {
+            console.error("Failed to read user info from storage", err);
+            setUserId(null);
+            setUserName(null);
+        }
+    }, []);
+
+    useEffect(() => {
+        try {
+            const key = cacheKeyForUser(userId);
+            let raw: string | null = null;
+            if (key) raw = localStorage.getItem(key);
+            if (!raw && !userId) {
+                raw = localStorage.getItem("events");
+            }
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                setEventsMap(normalizeEventMap(parsed));
+            }
+        } catch (err) {
+            console.error("Failed to hydrate events cache", err);
+        }
+    }, [userId, cacheKeyForUser]);
 
     const normalizeDate = (d: any) => {
         if (!d) return "";
@@ -37,12 +115,39 @@ export default function DashboardPage() {
         if (isNaN(dt.getTime())) return String(d).slice(0,10);
         return dt.toISOString().slice(0,10);
     };
+    const normalizeCompleted = (val: any) => val === true || val === 1 || val === "1";
+
+    const castEvent = (raw: any, fallbackDate?: string): Event => {
+        const date = normalizeDate(raw?.date ?? raw?.event_date ?? fallbackDate);
+        const formatTime = (t?: string | null) => (t ? String(t).slice(0,5) : undefined);
+        return {
+            id: Number(raw?.id ?? Date.now()),
+            title: String(raw?.title ?? ""),
+            date,
+            start_time: formatTime(raw?.start_time),
+            end_time: formatTime(raw?.end_time),
+            completed: normalizeCompleted(raw?.completed),
+        };
+    };
+
+    const normalizeEventMap = (data: any): Record<string, Event[]> => {
+        const normalized: Record<string, Event[]> = {};
+        if (!data || typeof data !== "object") return normalized;
+        Object.entries(data).forEach(([key, value]) => {
+            if (!Array.isArray(value)) return;
+            const list = value
+                .map((item) => castEvent(item, key))
+                .filter((ev) => !!ev.date);
+            if (list.length) normalized[key] = list;
+        });
+        return normalized;
+    };
 
     // fetch events from backend (per-user table) if userId present,
     // otherwise fall back to localStorage as before
-    const fetchEvents = async (uid?: number | null) => {
+    const fetchEvents = useCallback(async (uid?: number | null) => {
         // prefer explicit uid, fallback to state
-        const effectiveUid = uid ?? userId;
+        const effectiveUid = typeof uid === "number" ? uid : userId;
         if (effectiveUid) {
             try {
                 const res = await fetch(`/api/events?userId=${effectiveUid}`);
@@ -50,22 +155,15 @@ export default function DashboardPage() {
                     console.error("Failed to fetch events", await res.text());
                     return;
                 }
-                const rows: { id: number; title: string; event_date: string }[] = await res.json();
+                const rows: any[] = await res.json();
                 const map: Record<string, Event[]> = {};
                 for (const r of rows) {
-                    const d = normalizeDate(r.event_date);
-                    if (!d) continue;
-                    map[d] = map[d] || [];
-                    map[d].push({ id: r.id, title: r.title, date: d });
+                    const ev = castEvent(r);
+                    if (!ev.date) continue;
+                    map[ev.date] = map[ev.date] ? [...map[ev.date], ev] : [ev];
                 }
-                // merge with existing eventsMap so local-only events are preserved
-                setEventsMap(prev => {
-                    const merged = { ...(prev || {}) };
-                    for (const k of Object.keys(map)) {
-                        merged[k] = merged[k] ? [...merged[k], ...map[k]] : map[k];
-                    }
-                    return merged;
-                });
+                persistEvents(map, effectiveUid);
+                setEventsMap(map);
                 return;
             } catch (e) {
                 console.error("Error fetching events", e);
@@ -77,17 +175,19 @@ export default function DashboardPage() {
             const raw = localStorage.getItem("events");
             if (raw) {
                 const parsed = JSON.parse(raw);
-                setEventsMap(parsed || {});
+                if (parsed) setEventsMap(normalizeEventMap(parsed));
             }
         } catch (e) {
             console.error("Invalid local events JSON", e);
         }
-    };
+    }, [userId, persistEvents]);
 
-    // fetch on mount and when userId changes
+    // fetch when user or route changes back to dashboard
     useEffect(() => {
-        fetchEvents(userId);
-    }, [userId]);
+        if (pathname === "/dashboard") {
+            fetchEvents(userId);
+        }
+    }, [pathname, userId, fetchEvents]);
 
     // persist to localStorage only if no userId (server-backed events are authoritative)
     useEffect(() => {
@@ -138,50 +238,7 @@ export default function DashboardPage() {
         setSelectedDate(null);
     };
 
-    // add to selectedDate if present, otherwise today.
-    // when userId exists, POST to /api/events and update eventsMap with returned insertedId
-    const handleQuickAdd = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!quickText.trim()) return;
-
-        const dateStr = selectedDate ?? new Date().toISOString().slice(0, 10); // selected date or today
-        const title = quickText.trim();
-
-        if (userId) {
-            try {
-                const res = await fetch("/api/events", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ userId, title, date: dateStr }),
-                });
-                const data = await res.json();
-                if (!res.ok) {
-                    console.error("Add event failed:", data);
-                } else {
-                    const newId = data.insertedId ?? Date.now();
-                    // insert into eventsMap immediately
-                    setEventsMap(prev => {
-                        const copy = { ...(prev || {}) };
-                        copy[dateStr] = copy[dateStr] ? [...copy[dateStr], { id: newId, title, date: dateStr }] : [{ id: newId, title, date: dateStr }];
-                        return copy;
-                    });
-                }
-            } catch (err) {
-                console.error(err);
-            }
-        } else {
-            const ev: Event = { id: Date.now(), title, date: dateStr };
-            setEventsMap(prev => {
-                const copy = { ...(prev || {}) };
-                copy[dateStr] = copy[dateStr] ? [...copy[dateStr], ev] : [ev];
-                return copy;
-            });
-        }
-
-        setQuickText("");
-    };
-
-    // --- new: send quickText to AI route, parse output into events and add them ---
+    // Parse AI response into events and add them
     const dayNameToIndex: Record<string, number> = { Sun:0, Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6 };
     const nextDateForWeekday = (weekday: number) => {
         const base = new Date();
@@ -190,6 +247,21 @@ export default function DashboardPage() {
         d.setDate(base.getDate() + diff);
         return d.toISOString().slice(0,10);
     };
+
+    const selectedOrToday = () => selectedDate ?? new Date().toISOString().slice(0, 10);
+
+    const addEventToState = useCallback(
+        (dateStr: string, event: Event) => {
+            setEventsMap(prev => {
+                const copy = { ...(prev || {}) };
+                const normalizedEvent = { ...event, completed: normalizeCompleted(event.completed) };
+                copy[dateStr] = copy[dateStr] ? [...copy[dateStr], normalizedEvent] : [normalizedEvent];
+                persistEvents(copy, userId);
+                return copy;
+            });
+        },
+        [persistEvents, userId]
+    );
 
     const parseAiPlanToEvents = (text: string) => {
     const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
@@ -227,13 +299,86 @@ export default function DashboardPage() {
 };
 
 
+    const closeAddModal = () => setAddModalOpen(false);
+    const closeAiModal = () => {
+        setAiModalOpen(false);
+        setAiPrompt("");
+    };
+
+    const openAddModal = () => {
+        setAddEventError("");
+        setNewEventData({
+            title: "",
+            date: selectedOrToday(),
+            startTime: "",
+            endTime: "",
+            category: "Work",
+            description: "",
+        });
+        setAddModalOpen(true);
+    };
+
+    const handleSaveEvent = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setAddEventError("");
+        if (!newEventData.title.trim() || !newEventData.date) {
+            setAddEventError("Title and date are required.");
+            return;
+        }
+
+        const payload = {
+            title: newEventData.title.trim(),
+            date: newEventData.date,
+            startTime: newEventData.startTime || null,
+            endTime: newEventData.endTime || null,
+        };
+
+        try {
+            if (userId) {
+                const res = await fetch("/api/events", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ userId, ...payload }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    setAddEventError(data.error || "Failed to add event");
+                    return;
+                }
+                const newId = data.insertedId ?? Date.now();
+                addEventToState(payload.date, {
+                    id: newId,
+                    title: payload.title,
+                    date: payload.date,
+                    start_time: payload.startTime ?? undefined,
+                    end_time: payload.endTime ?? undefined,
+                    completed: false,
+                });
+            } else {
+                const ev: Event = {
+                    id: Date.now(),
+                    title: payload.title,
+                    date: payload.date,
+                    start_time: payload.startTime ?? undefined,
+                    end_time: payload.endTime ?? undefined,
+                    completed: false,
+                };
+                addEventToState(payload.date, ev);
+            }
+            closeAddModal();
+        } catch (err) {
+            console.error("Failed to save event", err);
+            setAddEventError("Something went wrong. Please try again.");
+        }
+    };
+
     const importAiPlan = async () => {
-        if (!quickText.trim()) return;
+        if (!aiPrompt.trim()) return false;
         try {
             const res = await fetch("/api/ai-schedule", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt: quickText.trim() }),
+                body: JSON.stringify({ prompt: aiPrompt.trim() }),
             });
 
             // parse response body (try JSON first, fall back to raw text)
@@ -267,128 +412,414 @@ export default function DashboardPage() {
             
 
             for (const it of items) {
-            if (userId) {
-                try {
-                    const r = await fetch("/api/events", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ 
-                            userId, 
-                            title: it.title, 
-                            date: it.date,
-                            startTime: it.start_time,
-                            endTime: it.end_time
-                        }),
-                    });
-                    const jr = await r.json().catch(() => ({}));
-                    const newId = jr.insertedId ?? Date.now();
-                    setEventsMap(prev => {
-                        const copy = { ...(prev || {}) };
-                        copy[it.date] = copy[it.date] ? [...copy[it.date], { 
+                if (userId) {
+                    try {
+                        const r = await fetch("/api/events", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ 
+                                userId, 
+                                title: it.title, 
+                                date: it.date,
+                                startTime: it.start_time,
+                                endTime: it.end_time
+                            }),
+                        });
+                        const jr = await r.json().catch(() => ({}));
+                        const newId = jr.insertedId ?? Date.now();
+                        addEventToState(it.date, { 
                             id: newId, 
                             title: it.title, 
                             date: it.date,
                             start_time: it.start_time,
-                            end_time: it.end_time
-                        }] : [{ 
-                            id: newId, 
-                            title: it.title, 
-                            date: it.date,
-                            start_time: it.start_time,
-                            end_time: it.end_time
-                        }];
-                        return copy;
-                    });
-                } catch (err) {
-                    console.error("failed to POST event", err);
-                }
-            
-                } else {
-                    const ev: Event = { id: Date.now(), title: it.title, date: it.date };
-                    setEventsMap(prev => {
-                        const copy = { ...(prev || {}) };
-                        copy[it.date] = copy[it.date] ? [...copy[it.date], ev] : [ev];
-                        return copy;
-                    });
+                            end_time: it.end_time,
+                            completed: false,
+                        });
+                    } catch (err) {
+                        console.error("failed to POST event", err);
+                    }
+                
+                    } else {
+                    const ev: Event = { 
+                        id: Date.now(), 
+                        title: it.title, 
+                        date: it.date,
+                        start_time: it.start_time,
+                        end_time: it.end_time,
+                        completed: false,
+                    };
+                    addEventToState(it.date, ev);
                 }
             }
+            closeAiModal();
+            return true;
         } catch (err) {
             console.error("importAiPlan unexpected error:", err);
+            return false;
         } finally {
-            setQuickText("");
         }
     };
     // --- end new code ---
 
+    const navItems = [
+        { label: "Calendar", icon: CalendarIcon, active: true },
+        { label: "Tasks", icon: ListChecks },
+        { label: "Notes", icon: FileText },
+        { label: "Events", icon: LayoutList },
+        { label: "Settings", icon: Settings },
+    ];
+
+    const upcomingEvents = useMemo(() => {
+        const list: { dateStr: string; event: Event; dateObj: Date }[] = [];
+        Object.entries(eventsMap || {}).forEach(([d, evs]) => {
+            evs.forEach((ev) => {
+                const dateObj = new Date(`${d}T${ev.start_time || "12:00"}:00`);
+                if (!Number.isNaN(dateObj.getTime())) list.push({ dateStr: d, event: ev, dateObj });
+            });
+        });
+        return list.sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime()).slice(0, 6);
+    }, [eventsMap]);
+
+    const formatUpcomingDate = (d: string) => {
+        const dateObj = new Date(d);
+        if (Number.isNaN(dateObj.getTime())) return d;
+        return dateObj.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    };
+
     return (
-        <div className="min-h-screen flex flex-col items-center bg-gradient-to-r from-yellow-200 via-yellow-100 to-white px-6 py-10 text-gray-900">
-            <div className="w-full max-w-4xl">
-                <div className="flex items-center justify-between mb-6">
-                    <h1 className="text-4xl font-bold text-black">Calendar</h1>
-                    <div className="flex gap-2">
-                        <button onClick={prevMonth} className="px-3 py-1 bg-white rounded shadow text-black">Prev</button>
-                        <button onClick={nextMonth} className="px-3 py-1 bg-white rounded shadow text-black">Next</button>
+        <>
+        <div className="min-h-screen bg-[var(--background)] text-[var(--text)]">
+            <div className="flex min-h-screen">
+                <aside className="w-72 bg-[var(--accent)] border-r border-[rgba(255,179,0,0.3)] flex flex-col justify-between py-8 px-6">
+                    <div>
+                        <button
+                            onClick={() => router.push("/")}
+                            className="flex items-center gap-3 mb-8 transition-transform duration-200 hover:-translate-y-0.5"
+                        >
+                            <div className="h-10 w-10 rounded-full bg-yellow-500 flex items-center justify-center text-white font-bold shadow">
+                                Z
+                            </div>
+                            <span className="text-xl font-bold text-[var(--text)]">Zenned</span>
+                        </button>
+                        <div className="relative">
+                            <Search className="h-4 w-4 text-gray-500 absolute left-3 top-3" />
+                            <input
+                                placeholder="Search events..."
+                                className="w-full pl-9 pr-3 py-2 rounded-lg bg-white/80 border border-[rgba(255,179,0,0.4)] placeholder-[var(--text-light)] focus:ring-2 focus:ring-[var(--secondary)] focus:outline-none"
+                            />
+                        </div>
+                        <nav className="mt-8 space-y-2">
+                            {navItems.map(({ label, icon: Icon, active }) => (
+                                <button
+                                    key={label}
+                                    className={`flex items-center w-full gap-3 px-3 py-3 rounded-lg transition-all duration-200 transform hover:-translate-y-0.5 ${
+                                        active ? "bg-[var(--primary)] text-[var(--text)] font-semibold shadow-sm" : "text-[var(--text-light)] hover:bg-[var(--accent)]"
+                                    }`}
+                                >
+                                    <Icon className="h-5 w-5" />
+                                    <span>{label}</span>
+                                </button>
+                            ))}
+                        </nav>
                     </div>
-                </div>
-
-                <div className="bg-white shadow-lg rounded-xl p-6">
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-2xl font-semibold text-gray-800">{monthLabel}</h2>
+                    <div className="pt-6 border-t border-[rgba(255,179,0,0.3)] flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-full bg-[var(--primary)] text-white font-bold flex items-center justify-center">
+                            {userName ? userName.slice(0, 2).toUpperCase() : "YOU"}
+                        </div>
+                        <div>
+                            <div className="text-sm font-semibold text-[var(--text)]">{userName || "Welcome back"}</div>
+                            <div className="text-xs text-[var(--text-light)]">Zen mode on</div>
+                        </div>
                     </div>
+                </aside>
 
-                    <div className="grid grid-cols-7 gap-2 text-center">
-                        {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => (
-                            <div key={d} className="font-medium text-sm text-gray-800">{d}</div>
-                        ))}
-                    </div>
-
-                    <div className="grid grid-cols-7 gap-2 mt-2">
-                        {cells.map((day, idx) => {
-                            const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-                            const dateStr = day ? formatDateString(day) : "";
-                            const hasEvents = day ? !!(eventsMap[dateStr] && eventsMap[dateStr].length) : false;
-
-                            if (!day) {
-                                return <div key={idx} className="min-h-[80px] p-2 rounded border-transparent bg-transparent" />;
-                            }
-
-                            const isSelected = selectedDate === dateStr;
-
-                            return (
+                <main className="flex-1 p-6 flex gap-6">
+                    <section className="flex-1 bg-white rounded-2xl shadow-md p-6">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                                <button
+                                    onClick={prevMonth}
+                                    className="h-10 w-10 rounded-full bg-yellow-100 flex items-center justify-center text-gray-800 hover:bg-yellow-200 transition-transform duration-200 hover:-translate-y-0.5"
+                                    aria-label="Previous month"
+                                >
+                                    <ChevronLeft className="h-5 w-5" />
+                                </button>
+                                <h2 className="text-2xl font-bold text-gray-900">{monthLabel}</h2>
+                                <button
+                                    onClick={nextMonth}
+                                    className="h-10 w-10 rounded-full bg-yellow-100 flex items-center justify-center text-gray-800 hover:bg-yellow-200 transition-transform duration-200 hover:-translate-y-0.5"
+                                    aria-label="Next month"
+                                >
+                                    <ChevronRight className="h-5 w-5" />
+                                </button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                {(["Day", "Week", "Month"] as const).map((mode) => (
+                                    <button
+                                        key={mode}
+                                        onClick={() => setViewMode(mode)}
+                                        className={`px-3 py-2 rounded-lg text-sm font-semibold transition-transform duration-200 hover:-translate-y-0.5 ${
+                                            viewMode === mode
+                                                ? "bg-yellow-400 text-gray-900 shadow-sm"
+                                                : "bg-yellow-100 text-gray-700 hover:bg-yellow-200"
+                                        }`}
+                                    >
+                                        {mode}
+                                    </button>
+                                ))}
                                 <button
                                     type="button"
-                                    key={idx}
-                                    onClick={() => handleDayClick(day)}
-                                    aria-label={`Select ${dateStr}`}
-                                    className={`min-h-[80px] p-3 rounded border bg-white text-left hover:shadow-sm focus:shadow-md relative flex flex-col justify-start transition-colors
-                                        ${isToday ? "ring-2 ring-yellow-300" : ""} ${isSelected ? "ring-4 ring-yellow-500 bg-yellow-50" : ""}`}
+                                    onClick={() => {
+                                        setAiPrompt("");
+                                        setAiModalOpen(true);
+                                    }}
+                                    className="flex items-center gap-2 px-4 py-2 bg-yellow-100 text-gray-900 rounded-lg font-semibold hover:bg-yellow-200 transition-transform duration-200 hover:-translate-y-0.5"
                                 >
-                                    <div className="flex items-start justify-between">
-                                        <span className="text-lg font-semibold text-black">{day}</span>
-                                        {hasEvents && <span className="h-2 w-2 rounded-full bg-yellow-500 mt-1" />}
+                                    <Sparkles className="h-4 w-4" />
+                                    Import AI
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={openAddModal}
+                                    className="flex items-center gap-2 px-4 py-2 bg-yellow-400 text-gray-900 rounded-lg font-semibold shadow hover:bg-yellow-500 transition-transform duration-200 hover:-translate-y-0.5"
+                                >
+                                    <Plus className="h-4 w-4" /> Add Event
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="mt-6">
+                            <div className="grid grid-cols-7 text-center text-sm font-semibold text-gray-700">
+                                {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => (
+                                    <div key={d} className="py-2">{d}</div>
+                                ))}
+                            </div>
+                            <div className="grid grid-cols-7 gap-2">
+                                {cells.map((day, idx) => {
+                                    const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
+                                    const dateStr = day ? formatDateString(day) : "";
+                                    const hasEvents = day ? !!(eventsMap[dateStr] && eventsMap[dateStr].length) : false;
+
+                                    if (!day) {
+                                        return <div key={idx} className="min-h-[110px] rounded-xl bg-transparent" />;
+                                    }
+
+                                    const isSelected = selectedDate === dateStr;
+
+                                    return (
+                                        <button
+                                            type="button"
+                                            key={idx}
+                                            onClick={() => handleDayClick(day)}
+                                            aria-label={`Select ${dateStr}`}
+                                            className={`min-h-[110px] p-3 rounded-xl text-left border transition bg-[#fdfaf3] hover:shadow-sm transform transition-transform duration-200 hover:-translate-y-0.5 ${
+                                                isSelected ? "border-yellow-400 ring-2 ring-yellow-300 bg-yellow-50" : "border-yellow-100"
+                                            } ${isToday ? "ring-2 ring-yellow-200" : ""}`}
+                                        >
+                                            <div className="flex items-start justify-between">
+                                                <span className="text-lg font-semibold text-gray-900">{day}</span>
+                                                {hasEvents && <span className="h-2.5 w-2.5 rounded-full bg-yellow-500 mt-1" />}
+                                            </div>
+                                            <div className="mt-3 space-y-1">
+                                                {hasEvents && eventsMap[dateStr]?.slice(0, 2).map((ev, idx) => (
+                                                    <div key={`${dateStr}-${ev.id}-${idx}`} className="text-xs bg-white rounded-md px-2 py-1 border border-yellow-100 text-gray-800 truncate">
+                                                        {ev.title}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        <p className="mt-8 text-sm text-gray-700">
+                            Select a day once to focus it. Click again to open its timeline page, or use “Add Event” / “Import AI” for quick scheduling.
+                        </p>
+                    </section>
+
+                    <aside className="w-80 bg-white rounded-2xl shadow-md p-6 flex flex-col">
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-semibold text-gray-900">Upcoming Events</h3>
+                            <button className="h-8 w-8 rounded-full bg-yellow-100 flex items-center justify-center text-gray-800 transition-transform duration-200 hover:-translate-y-0.5">
+                                <ChevronDown className="h-4 w-4" />
+                            </button>
+                        </div>
+                        <div className="space-y-3 flex-1 overflow-auto">
+                            {upcomingEvents.length === 0 && (
+                                <p className="text-sm text-gray-600">No events yet. Add one to get started!</p>
+                            )}
+                            {upcomingEvents.map(({ dateStr, event }) => (
+                                <button
+                                    key={event.id}
+                                    type="button"
+                                    onClick={() => router.push(`/dashboard/day/${dateStr}/landing`)}
+                                    className="w-full text-left bg-[#fff7e6] border border-yellow-100 rounded-xl p-4 shadow-sm transition-transform duration-200 hover:-translate-y-0.5 focus:outline-none"
+                                >
+                                    <div className="text-xs font-semibold text-yellow-700">
+                                        {formatUpcomingDate(dateStr)}{" "}
+                                        {event.start_time ? `• ${event.start_time}` : ""}
                                     </div>
-                                    <div className="mt-2 text-sm text-gray-700 truncate">
-                                        {hasEvents && eventsMap[dateStr] && eventsMap[dateStr][0] && eventsMap[dateStr][0].title}
+                                    <div className="mt-1 text-sm font-semibold text-gray-900 truncate">{event.title}</div>
+                                    <div className="mt-2 inline-flex items-center px-2 py-1 text-[11px] rounded-full bg-white border border-yellow-200 text-yellow-800">
+                                        {viewMode}
                                     </div>
                                 </button>
-                            );
-                        })}
-                    </div>
-
-                    <form onSubmit={handleQuickAdd} className="mt-6 flex gap-2">
-                        <input
-                            value={quickText}
-                            onChange={e => setQuickText(e.target.value)}
-                            placeholder={selectedDate ? `Add event to ${selectedDate}` : "Quick add event to today"}
-                            className="flex-1 px-4 py-2 border rounded text-gray-900 placeholder-gray-500"
-                        />
-                        <button type="submit" className="px-4 py-2 bg-yellow-400 rounded text-black">Add</button>
-                        <button type="button" onClick={importAiPlan} className="px-4 py-2 bg-gray-800 text-white rounded">Import AI</button>
-                    </form>
-
-                    <p className="mt-3 text-sm text-gray-700">Select a day (click once) then add an event to that day. Click the selected day again to open its page.</p>
-                </div>
+                            ))}
+                        </div>
+                    </aside>
+                </main>
             </div>
         </div>
+        {isAddModalOpen && (
+            <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center px-4 py-6 z-50" onClick={closeAddModal}>
+                <div
+                    className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 md:p-8"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2 text-gray-900 font-semibold text-lg">
+                            <CalendarIcon className="h-5 w-5 text-yellow-500" />
+                            Add Event
+                        </div>
+                        <button onClick={closeAddModal} className="text-gray-500 hover:text-gray-700">
+                            ×
+                        </button>
+                    </div>
+                    <form className="space-y-4" onSubmit={handleSaveEvent}>
+                        <div>
+                            <label className="text-sm font-semibold text-gray-800">Event Title</label>
+                            <input
+                                type="text"
+                                className="mt-1 w-full px-4 py-2.5 border border-yellow-200 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:outline-none"
+                                placeholder="Enter title"
+                                value={newEventData.title}
+                                onChange={(e) => setNewEventData(prev => ({ ...prev, title: e.target.value }))}
+                                required
+                            />
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                                <label className="text-sm font-semibold text-gray-800">Date</label>
+                                <input
+                                    type="date"
+                                    className="mt-1 w-full px-4 py-2.5 border border-yellow-200 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:outline-none"
+                                    value={newEventData.date}
+                                    onChange={(e) => setNewEventData(prev => ({ ...prev, date: e.target.value }))}
+                                    required
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-semibold text-gray-800">Start Time</label>
+                                <input
+                                    type="time"
+                                    className="mt-1 w-full px-4 py-2.5 border border-yellow-200 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:outline-none"
+                                    value={newEventData.startTime}
+                                    onChange={(e) => setNewEventData(prev => ({ ...prev, startTime: e.target.value }))}
+                                />
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                                <label className="text-sm font-semibold text-gray-800">End Time</label>
+                                <input
+                                    type="time"
+                                    className="mt-1 w-full px-4 py-2.5 border border-yellow-200 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:outline-none"
+                                    value={newEventData.endTime}
+                                    onChange={(e) => setNewEventData(prev => ({ ...prev, endTime: e.target.value }))}
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-semibold text-gray-800">Category</label>
+                                <select
+                                    className="mt-1 w-full px-4 py-2.5 border border-yellow-200 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:outline-none"
+                                    value={newEventData.category}
+                                    onChange={(e) => setNewEventData(prev => ({ ...prev, category: e.target.value }))}
+                                >
+                                    <option>Work</option>
+                                    <option>Personal</option>
+                                    <option>Meeting</option>
+                                    <option>Other</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="text-sm font-semibold text-gray-800">Description</label>
+                            <textarea
+                                className="mt-1 w-full px-4 py-2.5 border border-yellow-200 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:outline-none"
+                                rows={3}
+                                placeholder="Add any notes"
+                                value={newEventData.description}
+                                onChange={(e) => setNewEventData(prev => ({ ...prev, description: e.target.value }))}
+                            />
+                        </div>
+                        {addEventError && <p className="text-sm text-red-500">{addEventError}</p>}
+                        <div className="flex justify-end gap-3 pt-2">
+                            <button
+                                type="button"
+                                onClick={closeAddModal}
+                                className="px-4 py-2 rounded-full bg-yellow-100 text-gray-800 font-semibold hover:bg-yellow-200 transition-transform duration-200 hover:-translate-y-0.5"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                className="px-5 py-2 rounded-full bg-yellow-400 text-gray-900 font-semibold shadow hover:bg-yellow-500 transition-transform duration-200 hover:-translate-y-0.5"
+                            >
+                                Save Event
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        )}
+        {isAiModalOpen && (
+            <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center px-4 py-6 z-50" onClick={closeAiModal}>
+                <div
+                    className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6"
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-xl font-semibold text-gray-900">Import Events with AI</h3>
+                        <button onClick={closeAiModal} className="text-gray-500 hover:text-gray-700">
+                            ×
+                        </button>
+                    </div>
+                    <p className="text-sm text-gray-700 mb-3">Describe the events you want to add</p>
+                    <form
+                        onSubmit={async (e) => {
+                            e.preventDefault();
+                            await importAiPlan();
+                        }}
+                        className="space-y-4"
+                    >
+                        <textarea
+                            className="w-full px-4 py-3 border border-yellow-200 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:outline-none min-h-[140px]"
+                            placeholder="e.g., Meeting with marketing team next Tuesday at 2 PM"
+                            value={aiPrompt}
+                            onChange={(e) => setAiPrompt(e.target.value)}
+                            required
+                        />
+                        <div className="flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={closeAiModal}
+                                className="px-4 py-2 rounded-full bg-yellow-100 text-gray-800 font-semibold hover:bg-yellow-200 transition-transform duration-200 hover:-translate-y-0.5"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={!aiPrompt.trim()}
+                                className="px-5 py-2 rounded-full bg-yellow-400 text-gray-900 font-semibold shadow hover:bg-yellow-500 disabled:opacity-50 disabled:cursor-not-allowed transition-transform duration-200 hover:-translate-y-0.5 disabled:hover:translate-y-0"
+                            >
+                                Process
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        )}
+        </>
     );
 }

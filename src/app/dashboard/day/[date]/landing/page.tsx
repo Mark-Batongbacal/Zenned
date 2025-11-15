@@ -11,6 +11,41 @@ import {
   useSensors,
 } from "@dnd-kit/core";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import { Trash2 } from "lucide-react";
+
+const MINUTES_IN_DAY = 24 * 60;
+const SLOT_MINUTES = 15;
+
+const snapToSlot = (value: number) => Math.round(value / SLOT_MINUTES) * SLOT_MINUTES;
+
+const timeToMinutes = (time?: string) => {
+  if (!time) return 0;
+  const [h, m] = time.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return 0;
+  return h * 60 + m;
+};
+
+const minutesToTime = (minutes: number) => {
+  const clamped = Math.min(Math.max(minutes, 0), MINUTES_IN_DAY);
+  const h = Math.floor(clamped / 60);
+  const m = clamped % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+};
+
+const clampAndSnapRange = (start: number, end: number) => {
+  let nextStart = Math.max(0, Math.min(start, MINUTES_IN_DAY - SLOT_MINUTES));
+  let nextEnd = Math.max(nextStart + SLOT_MINUTES, Math.min(end, MINUTES_IN_DAY));
+
+  nextStart = snapToSlot(nextStart);
+  nextEnd = snapToSlot(nextEnd);
+
+  if (nextEnd > MINUTES_IN_DAY) {
+    nextEnd = MINUTES_IN_DAY;
+    nextStart = Math.min(nextStart, MINUTES_IN_DAY - SLOT_MINUTES);
+  }
+
+  return { start: nextStart, end: nextEnd };
+};
 
 type Event = {
   id: number;
@@ -80,6 +115,38 @@ export default function DayLandingPage() {
     loadEvents();
   }, [date, userId]);
 
+  const applyEventUpdate = (updatedEv: Event, persist = false) => {
+    setEvents((prev) => prev.map((e) => (e.id === updatedEv.id ? updatedEv : e)));
+
+    if (!persist) return;
+
+    if (userId) {
+      fetch("/api/events", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          id: updatedEv.id,
+          start_time: updatedEv.start_time,
+          end_time: updatedEv.end_time,
+        }),
+      }).catch((err) => console.error("Failed to persist event update", err));
+    } else {
+      try {
+        const raw = localStorage.getItem("events");
+        const map = raw ? JSON.parse(raw) : {};
+        const key = updatedEv.date || date;
+        if (!key) return;
+        const existing: Event[] = map[key] || [];
+        const found = existing.some((e: Event) => e.id === updatedEv.id);
+        map[key] = found ? existing.map((e: Event) => (e.id === updatedEv.id ? updatedEv : e)) : [...existing, updatedEv];
+        localStorage.setItem("events", JSON.stringify(map));
+      } catch (err) {
+        console.error("Failed to persist event to localStorage", err);
+      }
+    }
+  };
+
   // Delete
   const handleDelete = async () => {
     if (!eventToDelete) return;
@@ -115,83 +182,51 @@ export default function DayLandingPage() {
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
-  const { active, delta } = event;
-  const ev = events.find((e) => e.id === Number(active.id));
-  if (!ev || !ev.start_time || !ev.end_time) return;
+    const { active, delta } = event;
+    const ev = events.find((e) => e.id === Number(active.id));
+    if (!ev || !ev.start_time || !ev.end_time) return;
 
-  const [startH, startM] = ev.start_time.split(":").map(Number);
-  const [endH, endM] = ev.end_time.split(":").map(Number);
+    const startMinutes = timeToMinutes(ev.start_time);
+    const endMinutes = timeToMinutes(ev.end_time);
+    const height = endMinutes - startMinutes;
 
-  const top = startH * 60 + startM;
-  const height = endH * 60 + endM - top;
+    const updatedEv = (() => {
+      const { start, end } = clampAndSnapRange(startMinutes + delta.y, startMinutes + delta.y + height);
+      return { ...ev, start_time: minutesToTime(start), end_time: minutesToTime(end) };
+    })();
 
-  // New top with delta
-  let newTop = top + delta.y;
-
-  // ✅ Clamp newTop so it cannot go outside timeline
-  if (newTop < 0) newTop = 0;
-  if (newTop + height > 1440) newTop = 1440 - height;
-
-  // Snap to 15-min increments
-  newTop = Math.round(newTop / 15) * 15;
-
-  const newStartH = Math.floor(newTop / 60);
-  const newStartM = newTop % 60;
-  const newEndH = Math.floor((newTop + height) / 60);
-  const newEndM = (newTop + height) % 60;
-
-  const updatedEv = {
-    ...ev,
-    start_time: `${String(newStartH).padStart(2, "0")}:${String(newStartM).padStart(2, "0")}`,
-    end_time: `${String(newEndH).padStart(2, "0")}:${String(newEndM).padStart(2, "0")}`,
+    applyEventUpdate(updatedEv, true);
   };
-
-  setEvents((prev) => prev.map((e) => (e.id === ev.id ? updatedEv : e)));
-
-  if (userId) {
-    fetch("/api/events", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, id: ev.id, start_time: updatedEv.start_time, end_time: updatedEv.end_time }),
-    }).catch(console.error);
-  } else {
-    const raw = localStorage.getItem("events");
-    if (raw) {
-      const map = JSON.parse(raw);
-      if (map[date]) {
-        map[date] = map[date].map((e: Event) => (e.id === ev.id ? updatedEv : e));
-        localStorage.setItem("events", JSON.stringify(map));
-      }
-    }
-  }
-};
 
 
   return (
-    <div className="min-h-screen flex flex-col items-center bg-gradient-to-r from-yellow-100 via-yellow-50 to-white px-6 py-10 text-gray-900">
-      <div className="w-full max-w-3xl">
+    <div className="min-h-screen flex flex-col items-center bg-gradient-to-b from-[var(--background)] to-[var(--accent)] px-6 py-10 text-[var(--text)]">
+      <div className="w-full max-w-4xl">
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-3xl font-bold text-black">Events for {date}</h1>
+          <div>
+            <p className="text-sm uppercase tracking-wide text-[var(--text-light)]">Daily Timeline</p>
+            <h1 className="text-3xl font-bold">Events for {date}</h1>
+          </div>
           <button
             onClick={() => router.push("/dashboard")}
-            className="px-4 py-2 bg-gray-800 text-white rounded"
+            className="px-5 py-2 rounded-full bg-[var(--primary)] text-[var(--text)] font-semibold shadow transition-transform duration-200 hover:-translate-y-0.5"
           >
             Back to Calendar
           </button>
         </div>
 
-        <div className="relative bg-white border shadow-md rounded-lg h-[1440px]">
+        <div className="relative bg-[var(--surface)] border border-[rgba(255,179,0,0.35)] shadow-xl rounded-3xl h-[1440px] overflow-hidden">
           {/* Hour labels */}
           {[...Array(24)].map((_, hour) => (
             <div
               key={hour}
-              className="absolute left-0 right-0 h-[60px] text-xs px-2 z-30 pointer-events-none"
+              className="absolute left-0 right-0 h-[60px] text-xs px-4 z-30 pointer-events-none flex items-start text-[var(--text-light)]"
               style={{
                 top: `${hour * 60}px`,
-                borderLeft: "2px solid",
-                borderRight: "2px solid",
-                 borderTop: hour === 0 ? "0.5px solid" : "none",
-                borderBottom: "0.5px solid",
+                borderLeft: "1px solid rgba(0,0,0,0.05)",
+                borderRight: "1px solid rgba(0,0,0,0.05)",
+                borderTop: hour === 0 ? "1px solid rgba(0,0,0,0.05)" : "none",
+                borderBottom: "1px solid rgba(0,0,0,0.05)",
               }}
             >
               {hour}:00
@@ -202,7 +237,7 @@ export default function DayLandingPage() {
           {[...Array(24 * 4)].map((_, i) => (
             <div
               key={`dot-${i}`}
-              className="absolute left-0 right-0 border-t border-dotted border-gray-300 z-0 pointer-events-none"
+              className="absolute left-0 right-0 border-t border-dotted border-[rgba(0,0,0,0.08)] z-0 pointer-events-none"
               style={{ top: `${i * 15}px` }}
             />
           ))}
@@ -211,8 +246,6 @@ export default function DayLandingPage() {
             sensors={sensors}
             modifiers={[restrictToVerticalAxis]}
             onDragEnd={handleDragEnd}
-
-              
           >
             {events.map((ev) => {
               if (!ev.start_time || !ev.end_time) return null;
@@ -220,19 +253,19 @@ export default function DayLandingPage() {
               const [endH, endM] = ev.end_time.split(":").map(Number);
               const top = startH * 60 + startM;
               const height = endH * 60 + endM - top;
-              return <DraggableEvent 
-              key={ev.id} 
-              ev={ev} 
-              top={top} 
-              height={height} 
-              events={events}  
-              setEventToDelete={setEventToDelete} 
-              setConfirmOpen={setConfirmOpen} 
-              updateEvent={(updatedEv) => {
-              setEvents(prev => prev.map(e => e.id === updatedEv.id ? updatedEv : e));
-              }}
-              />;
-            },)}
+              return (
+                <DraggableEvent
+                  key={ev.id}
+                  ev={ev}
+                  top={top}
+                  height={height}
+                  events={events}
+                  setEventToDelete={setEventToDelete}
+                  setConfirmOpen={setConfirmOpen}
+                  updateEvent={applyEventUpdate}
+                />
+              );
+            })}
 
           </DndContext>
 
@@ -256,15 +289,15 @@ export default function DayLandingPage() {
               <div className="flex justify-end gap-3">
                 <button
                   onClick={() => setConfirmOpen(false)}
-                  className="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"
+                  className="px-4 py-2 rounded-full bg-[var(--accent)] text-[var(--text)] font-semibold hover:bg-[var(--secondary)] transition"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleDelete}
-                  className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 z-100"
+                  className="px-4 py-2 rounded-full bg-red-500 text-white font-semibold hover:bg-red-600 z-100 transition"
                 >
-                  Delete
+                  <Trash2 size={16} />
                 </button>
               </div>
             </div>
@@ -283,7 +316,7 @@ type DraggableEventProps = {
   events: Event[];
   setEventToDelete: React.Dispatch<React.SetStateAction<Event | null>>;
   setConfirmOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  updateEvent: (updatedEv: Event) => void;
+  updateEvent: (updatedEv: Event, persist?: boolean) => void;
 };
 
 function DraggableEvent({
@@ -294,7 +327,7 @@ function DraggableEvent({
   setEventToDelete,
   setConfirmOpen,
   updateEvent
-}: DraggableEventProps & { events: Event[] }) {
+}: DraggableEventProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: ev.id.toString(),
   });
@@ -304,7 +337,6 @@ function DraggableEvent({
   const calendarBottom = 1440;
 
   // Find nearest event above and below
-  const evIndex = events.findIndex((e) => e.id === ev.id);
   const otherEvents = events.filter((e) => e.id !== ev.id);
 
   let minY = calendarTop; // cannot go above calendar
@@ -329,6 +361,37 @@ function DraggableEvent({
   if (currentTop < minY) clampedY = minY - top;
   if (currentTop > maxY) clampedY = maxY - top;
 
+  const handleResizeStart = (direction: "start" | "end") => (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const dragStartY = e.clientY;
+    const initialStart = top;
+    const initialEnd = top + height;
+    let latest: Event | null = null;
+
+    const handleMove = (pe: PointerEvent) => {
+      const delta = pe.clientY - dragStartY;
+      const tentativeStart = direction === "start" ? initialStart + delta : initialStart;
+      const tentativeEnd = direction === "end" ? initialEnd + delta : initialEnd;
+      const { start, end } = clampAndSnapRange(tentativeStart, tentativeEnd);
+      latest = { ...ev, start_time: minutesToTime(start), end_time: minutesToTime(end) };
+      updateEvent(latest);
+    };
+
+    const finish = (pe: PointerEvent) => {
+      handleMove(pe);
+      if (latest) updateEvent(latest, true);
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+  };
+
   const style: React.CSSProperties = {
     position: "absolute",
     top: top,
@@ -347,13 +410,27 @@ function DraggableEvent({
       className="relative rounded shadow cursor-grab overflow-visible"
       style={style}
     >
+      {/* Resize handles */}
+      <div
+        className="absolute left-2 right-2 top-0 h-2 z-50 cursor-n-resize"
+        onPointerDown={handleResizeStart("start")}
+      >
+        <div className="w-full h-full rounded bg-[var(--secondary)]" />
+      </div>
+      <div
+        className="absolute left-2 right-2 bottom-0 h-2 z-50 cursor-s-resize"
+        onPointerDown={handleResizeStart("end")}
+      >
+        <div className="w-full h-full rounded bg-[var(--secondary)]" />
+      </div>
+
       {/* Full-height background under the grid lines */}
-      <div className="absolute inset-0 bg-[#FDFD96] opacity-70 rounded" />
+      <div className="absolute inset-0 bg-[var(--accent)] opacity-90 rounded border border-[rgba(74,52,38,0.08)]" />
 
       {/* Middle box containing text + button, above grid lines */}
-      <div className="relative z-40 flex justify-between items-center px-2 py-1 bg-[#FDFD96] rounded shadow">
-        <span className="font-semibold truncate">{ev.title}</span>
-        <span className="text-xs ml-2 flex-shrink-0">
+      <div className="relative z-40 flex justify-between items-center px-2 py-1 bg-[var(--surface)] rounded shadow-sm border border-[rgba(74,52,38,0.08)]">
+        <span className="font-semibold truncate text-[var(--text)]">{ev.title}</span>
+        <span className="text-xs ml-2 flex-shrink-0 text-[var(--text-light)]">
           {ev.start_time} - {ev.end_time}
         </span>
         <button
@@ -361,9 +438,9 @@ function DraggableEvent({
             setEventToDelete(ev);
             setConfirmOpen(true);
           }}
-          className="ml-2 px-2 py-0.5 bg-pink-200 text-black text-xs rounded hover:bg-red-600 flex-shrink-0"
+          className="ml-2 px-2 py-0.5 bg-[var(--primary)] text-black text-xs rounded hover:bg-red-500 flex-shrink-0"
         >
-          Delete
+          <Trash2 size={16} />
         </button>
       </div>
     </div>
