@@ -33,98 +33,6 @@ body {
     color: var(--text);
 }
 
-.home-landing {
-    min-height: 100vh;
-    background: radial-gradient(circle at top, #fff5cc, var(--background));
-    display: flex;
-    flex-direction: column;
-    gap: 60px;
-    align-items: center;
-    padding: 80px 24px 100px;
-}
-
-.hero {
-    text-align: center;
-    max-width: 720px;
-}
-
-.hero-pill {
-    display: inline-block;
-    background: var(--accent);
-    color: var(--text-light);
-    padding: 6px 14px;
-    border-radius: 999px;
-    font-weight: 600;
-    font-size: 0.85rem;
-}
-
-.hero-title {
-    font-size: clamp(3rem, 8vw, 4.5rem);
-    font-weight: 800;
-    margin: 16px 0 12px;
-}
-
-.hero-subtitle {
-    color: var(--text-light);
-    font-size: 1.1rem;
-    line-height: 1.6;
-}
-
-.hero-actions {
-    margin-top: 28px;
-    display: flex;
-    gap: 16px;
-    justify-content: center;
-    flex-wrap: wrap;
-}
-
-.feature-grid {
-    width: min(1100px, 100%);
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 20px;
-}
-
-.feature-card {
-    background: var(--surface);
-    border-radius: var(--radius);
-    padding: 24px;
-    box-shadow: var(--shadow);
-    min-height: 180px;
-}
-
-.feature-card h3 {
-    font-size: 1.1rem;
-    margin-bottom: 10px;
-}
-
-.feature-card p {
-    color: var(--text-light);
-    line-height: 1.5;
-}
-
-.cta-strip {
-    width: min(1000px, 100%);
-    background: var(--surface);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
-    padding: 30px;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 20px;
-    align-items: center;
-}
-
-.cta-strip h4 {
-    font-size: 1.25rem;
-    margin-bottom: 6px;
-}
-
-.cta-strip p {
-    color: var(--text-light);
-}
-
 .no-scroll {
     margin: 0;
     padding: 0;
@@ -508,20 +416,16 @@ html, body {
 }
 
 .btn {
-    padding: 14px 24px;
+    padding: 12px 20px;
     border: none;
     border-radius: 14px;
     cursor: pointer;
     font-weight: 600;
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    justify-content: center;
     gap: 8px;
     transition: var(--transition);
-    font-size: 0.95rem;
-    min-height: 46px;
-    min-width: 140px;
-    text-align: center;
+    font-size: 14px;
 }
 
 .btn-primary {
@@ -532,13 +436,6 @@ html, body {
 .btn-secondary {
     background-color: var(--secondary);
     color: var(--text);
-}
-
-.btn-small {
-    padding: 8px 16px;
-    font-size: 0.8rem;
-    min-height: auto;
-    min-width: auto;
 }
 
 .calendar-layout {
@@ -578,7 +475,7 @@ html, body {
 .calendar-grid {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
-    grid-auto-rows: minmax(100px, 1fr);
+    grid-auto-rows: minmax(112px, 1fr);
     flex: 1;
     overflow-y: auto;
     min-height: 0;
@@ -591,9 +488,8 @@ html, body {
     display: flex;
     flex-direction: column;
     transition: var(--transition);
-    min-height: 100px;
+    min-height: 120px;
     overflow: hidden;
-    background-color: #fff;
 }
 
 .calendar-day:hover {
@@ -669,14 +565,6 @@ html, body {
     border-radius: 12px;
     padding: 16px;
     margin-bottom: 12px;
-    transition: var(--transition);
-    border-left: 4px solid transparent;
-}
-
-.upcoming-event:hover {
-    transform: translateX(6px);
-    background: var(--secondary);
-    border-left-color: var(--primary);
 }
 
 .modal {
@@ -764,12 +652,6 @@ html, body {
         width: 100%;
         max-height: 200px;
     }
-    .calendar-grid {
-        grid-auto-rows: minmax(90px, 1fr);
-    }
-    .calendar-day {
-        min-height: 90px;
-    }
 }
 
 @media (max-width: 768px) {
@@ -780,28 +662,10 @@ html, body {
         flex-direction: column;
         align-items: flex-start;
     }
-    .calendar-grid {
-        grid-auto-rows: minmax(70px, 1fr);
-    }
-    .calendar-day {
-        min-height: 70px;
-    }
 }
 
 @media (max-width: 576px) {
     .calendar-grid {
-        grid-auto-rows: minmax(50px, 1fr);
+        grid-auto-rows: minmax(72px, 1fr);
     }
-    .calendar-day {
-        min-height: 60px;
-    }
-}
-.hover-lift {
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    will-change: transform;
-}
-
-.hover-lift:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 6px 18px rgba(0,0,0,0.08);
 }
