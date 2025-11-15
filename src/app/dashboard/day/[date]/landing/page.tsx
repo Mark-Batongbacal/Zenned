@@ -11,7 +11,7 @@ import {
   useSensors,
 } from "@dnd-kit/core";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import { Trash2 } from "lucide-react";
+import { Trash2, CheckCircle2, Circle } from "lucide-react";
 
 const MINUTES_IN_DAY = 24 * 60;
 const SLOT_MINUTES = 15;
@@ -53,6 +53,7 @@ type Event = {
   date: string;
   start_time?: string;
   end_time?: string;
+  completed?: boolean;
 };
 
 export default function DayLandingPage() {
@@ -94,6 +95,7 @@ export default function DayLandingPage() {
             event_date: string;
             start_time?: string;
             end_time?: string;
+            completed?: boolean;
           }[] = await res.json();
 
           const filtered = allEvents
@@ -104,32 +106,58 @@ export default function DayLandingPage() {
               date: e.event_date.slice(0, 10),
               start_time: e.start_time,
               end_time: e.end_time,
+              completed: e.completed,
             }));
           setEvents(filtered);
         } catch (err) {
           console.error("Error loading day events:", err);
         }
-      } 
+      } else {
+        try {
+          const raw = localStorage.getItem("events");
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            const list: Event[] = parsed?.[date] || [];
+            setEvents(list);
+          }
+        } catch (err) {
+          console.error("Failed to load local events", err);
+        }
+      }
     };
 
     loadEvents();
   }, [date, userId]);
 
-  const applyEventUpdate = (updatedEv: Event, persist = false) => {
+  const toggleCompletion = (ev: Event) => {
+    const updated = { ...ev, completed: !ev.completed };
+    applyEventUpdate(updated, true, { completed: updated.completed });
+  };
+
+  const applyEventUpdate = (
+    updatedEv: Event,
+    persist = false,
+    patchedFields?: Partial<Pick<Event, "start_time" | "end_time" | "completed">>
+  ) => {
     setEvents((prev) => prev.map((e) => (e.id === updatedEv.id ? updatedEv : e)));
 
     if (!persist) return;
 
     if (userId) {
+      const payload: any = { userId, id: updatedEv.id };
+      const fields = patchedFields ?? {
+        start_time: updatedEv.start_time,
+        end_time: updatedEv.end_time,
+        completed: updatedEv.completed,
+      };
+      if (fields.start_time !== undefined) payload.start_time = fields.start_time ?? null;
+      if (fields.end_time !== undefined) payload.end_time = fields.end_time ?? null;
+      if (fields.completed !== undefined) payload.completed = fields.completed ? 1 : 0;
+
       fetch("/api/events", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId,
-          id: updatedEv.id,
-          start_time: updatedEv.start_time,
-          end_time: updatedEv.end_time,
-        }),
+        body: JSON.stringify(payload),
       }).catch((err) => console.error("Failed to persist event update", err));
     } else {
       try {
@@ -195,7 +223,7 @@ export default function DayLandingPage() {
       return { ...ev, start_time: minutesToTime(start), end_time: minutesToTime(end) };
     })();
 
-    applyEventUpdate(updatedEv, true);
+    applyEventUpdate(updatedEv, true, { start_time: updatedEv.start_time, end_time: updatedEv.end_time });
   };
 
 
@@ -263,6 +291,7 @@ export default function DayLandingPage() {
                   setEventToDelete={setEventToDelete}
                   setConfirmOpen={setConfirmOpen}
                   updateEvent={applyEventUpdate}
+                  onToggleComplete={toggleCompletion}
                 />
               );
             })}
@@ -316,7 +345,8 @@ type DraggableEventProps = {
   events: Event[];
   setEventToDelete: React.Dispatch<React.SetStateAction<Event | null>>;
   setConfirmOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  updateEvent: (updatedEv: Event, persist?: boolean) => void;
+  updateEvent: (updatedEv: Event, persist?: boolean, fields?: Partial<Pick<Event, "start_time" | "end_time" | "completed">>) => void;
+  onToggleComplete: (ev: Event) => void;
 };
 
 function DraggableEvent({
@@ -326,7 +356,8 @@ function DraggableEvent({
   events,
   setEventToDelete,
   setConfirmOpen,
-  updateEvent
+  updateEvent,
+  onToggleComplete
 }: DraggableEventProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: ev.id.toString(),
@@ -381,7 +412,7 @@ function DraggableEvent({
 
     const finish = (pe: PointerEvent) => {
       handleMove(pe);
-      if (latest) updateEvent(latest, true);
+      if (latest) updateEvent(latest, true, { start_time: latest.start_time, end_time: latest.end_time });
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", finish);
       window.removeEventListener("pointercancel", finish);
@@ -392,6 +423,8 @@ function DraggableEvent({
     window.addEventListener("pointercancel", finish);
   };
 
+  const isDone = !!ev.completed;
+
   const style: React.CSSProperties = {
     position: "absolute",
     top: top,
@@ -400,6 +433,7 @@ function DraggableEvent({
     right: 2,
     zIndex: isDragging ? 50 : 31,
     transform: `translate3d(0, ${Math.round(clampedY / 15) * 15}px, 0)`,
+    opacity: isDone ? 0.65 : 1,
   };
 
   return (
@@ -425,11 +459,18 @@ function DraggableEvent({
       </div>
 
       {/* Full-height background under the grid lines */}
-      <div className="absolute inset-0 bg-[var(--accent)] opacity-90 rounded border border-[rgba(74,52,38,0.08)]" />
+      <div className={`absolute inset-0 rounded border border-[rgba(74,52,38,0.08)] ${isDone ? "bg-white" : "bg-[var(--accent)] opacity-90"}`} />
 
       {/* Middle box containing text + button, above grid lines */}
-      <div className="relative z-40 flex justify-between items-center px-2 py-1 bg-[var(--surface)] rounded shadow-sm border border-[rgba(74,52,38,0.08)]">
-        <span className="font-semibold truncate text-[var(--text)]">{ev.title}</span>
+      <div className="relative z-40 flex justify-between items-center gap-2 px-2 py-1 bg-[var(--surface)] rounded shadow-sm border border-[rgba(74,52,38,0.08)]">
+        <button
+          onClick={() => onToggleComplete(ev)}
+          className="text-[var(--text)] hover:text-green-600 transition"
+          aria-label={isDone ? "Mark as not done" : "Mark as done"}
+        >
+          {isDone ? <CheckCircle2 size={18} /> : <Circle size={18} />}
+        </button>
+        <span className={`font-semibold truncate flex-1 ${isDone ? "line-through text-[var(--text-light)]" : "text-[var(--text)]"}`}>{ev.title}</span>
         <span className="text-xs ml-2 flex-shrink-0 text-[var(--text-light)]">
           {ev.start_time} - {ev.end_time}
         </span>

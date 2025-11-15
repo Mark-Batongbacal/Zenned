@@ -229,13 +229,30 @@ export default function DashboardPage() {
         }
     };
 
-    const prevMonth = () => {
-        setCurrentMonth(new Date(year, month - 1, 1));
-        setSelectedDate(null);
+    const shiftWeek = (direction: -1 | 1) => {
+        const anchor = selectedOrToday();
+        const base = new Date(anchor);
+        base.setDate(base.getDate() + direction * 7);
+        const newDate = base.toISOString().slice(0, 10);
+        setSelectedDate(newDate);
+        setCurrentMonth(new Date(base.getFullYear(), base.getMonth(), 1));
     };
-    const nextMonth = () => {
-        setCurrentMonth(new Date(year, month + 1, 1));
-        setSelectedDate(null);
+
+    const prevPeriod = () => {
+        if (viewMode === "Week") {
+            shiftWeek(-1);
+        } else {
+            setCurrentMonth(new Date(year, month - 1, 1));
+            setSelectedDate(null);
+        }
+    };
+    const nextPeriod = () => {
+        if (viewMode === "Week") {
+            shiftWeek(1);
+        } else {
+            setCurrentMonth(new Date(year, month + 1, 1));
+            setSelectedDate(null);
+        }
     };
 
     // Parse AI response into events and add them
@@ -250,6 +267,23 @@ export default function DashboardPage() {
 
     const selectedOrToday = () => selectedDate ?? new Date().toISOString().slice(0, 10);
 
+    const handleViewModeChange = (mode: "Day" | "Week" | "Month") => {
+        if (mode === "Day") {
+            const target = selectedOrToday();
+            router.push(`/dashboard/day/${target}/landing`);
+            return;
+        }
+        setViewMode(mode);
+        if (mode === "Week") {
+            const current = selectedOrToday();
+            const base = new Date(current);
+            const diff = base.getDay();
+            const start = new Date(base);
+            start.setDate(base.getDate() - diff);
+            setSelectedDate(start.toISOString().slice(0, 10));
+        }
+    };
+
     const addEventToState = useCallback(
         (dateStr: string, event: Event) => {
             setEventsMap(prev => {
@@ -259,6 +293,32 @@ export default function DashboardPage() {
                 persistEvents(copy, userId);
                 return copy;
             });
+        },
+        [persistEvents, userId]
+    );
+
+    const toggleEventCompletion = useCallback(
+        (eventId: number, dateHint?: string, currentCompleted?: boolean) => {
+            const nextCompleted = !currentCompleted;
+            setEventsMap(prev => {
+                const dateKey =
+                    dateHint ??
+                    Object.keys(prev).find(key => prev[key].some(ev => ev.id === eventId));
+                if (!dateKey) return prev;
+                const copy = { ...(prev || {}) };
+                copy[dateKey] = copy[dateKey].map(ev =>
+                    ev.id === eventId ? { ...ev, completed: nextCompleted } : ev
+                );
+                persistEvents(copy, userId);
+                return copy;
+            });
+            if (userId) {
+                fetch("/api/events", {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ userId, id: eventId, completed: nextCompleted }),
+                }).catch(err => console.error("Failed to toggle completion", err));
+            }
         },
         [persistEvents, userId]
     );
@@ -486,6 +546,27 @@ export default function DashboardPage() {
         return dateObj.toLocaleDateString(undefined, { month: "short", day: "numeric" });
     };
 
+    const weekDates = useMemo(() => {
+        if (viewMode !== "Week") return [];
+        const anchor = selectedDate ?? selectedOrToday();
+        const start = new Date(anchor);
+        const diff = start.getDay();
+        start.setDate(start.getDate() - diff);
+        return Array.from({ length: 7 }).map((_, idx) => {
+            const d = new Date(start);
+            d.setDate(start.getDate() + idx);
+            return d.toISOString().slice(0, 10);
+        });
+    }, [viewMode, selectedDate]);
+
+    const weekLabel = useMemo(() => {
+        if (viewMode !== "Week" || weekDates.length === 0) return "";
+        const formatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+        const start = formatter.format(new Date(weekDates[0]));
+        const end = formatter.format(new Date(weekDates[6]));
+        return `${start} – ${end}`;
+    }, [viewMode, weekDates]);
+
     return (
         <>
         <div className="min-h-screen bg-[var(--background)] text-[var(--text)]">
@@ -537,16 +618,18 @@ export default function DashboardPage() {
                     <section className="flex-1 bg-white rounded-2xl shadow-md p-6">
                         <div className="flex items-center justify-between">
                             <div className="flex items-center gap-3">
-                                <button
-                                    onClick={prevMonth}
+                                    <button
+                                    onClick={prevPeriod}
                                     className="h-10 w-10 rounded-full bg-yellow-100 flex items-center justify-center text-gray-800 hover:bg-yellow-200 transition-transform duration-200 hover:-translate-y-0.5"
                                     aria-label="Previous month"
                                 >
                                     <ChevronLeft className="h-5 w-5" />
                                 </button>
-                                <h2 className="text-2xl font-bold text-gray-900">{monthLabel}</h2>
+                                <h2 className="text-2xl font-bold text-gray-900">
+                                    {viewMode === "Week" && weekLabel ? weekLabel : monthLabel}
+                                </h2>
                                 <button
-                                    onClick={nextMonth}
+                                    onClick={nextPeriod}
                                     className="h-10 w-10 rounded-full bg-yellow-100 flex items-center justify-center text-gray-800 hover:bg-yellow-200 transition-transform duration-200 hover:-translate-y-0.5"
                                     aria-label="Next month"
                                 >
@@ -557,7 +640,7 @@ export default function DashboardPage() {
                                 {(["Day", "Week", "Month"] as const).map((mode) => (
                                     <button
                                         key={mode}
-                                        onClick={() => setViewMode(mode)}
+                                        onClick={() => handleViewModeChange(mode)}
                                         className={`px-3 py-2 rounded-lg text-sm font-semibold transition-transform duration-200 hover:-translate-y-0.5 ${
                                             viewMode === mode
                                                 ? "bg-yellow-400 text-gray-900 shadow-sm"
@@ -588,6 +671,7 @@ export default function DashboardPage() {
                             </div>
                         </div>
 
+                        {viewMode === "Month" && (
                         <div className="mt-6">
                             <div className="grid grid-cols-7 text-center text-sm font-semibold text-gray-700">
                                 {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => (
@@ -622,7 +706,12 @@ export default function DashboardPage() {
                                             </div>
                                             <div className="mt-3 space-y-1">
                                                 {hasEvents && eventsMap[dateStr]?.slice(0, 2).map((ev, idx) => (
-                                                    <div key={`${dateStr}-${ev.id}-${idx}`} className="text-xs bg-white rounded-md px-2 py-1 border border-yellow-100 text-gray-800 truncate">
+                                                    <div
+                                                        key={`${dateStr}-${ev.id}-${idx}`}
+                                                        className={`text-xs bg-white rounded-md px-2 py-1 border border-yellow-100 truncate ${
+                                                            ev.completed ? "line-through text-gray-400" : "text-gray-800"
+                                                        }`}
+                                                    >
                                                         {ev.title}
                                                     </div>
                                                 ))}
@@ -632,10 +721,53 @@ export default function DashboardPage() {
                                 })}
                             </div>
                         </div>
-
-                        <p className="mt-8 text-sm text-gray-700">
-                            Select a day once to focus it. Click again to open its timeline page, or use “Add Event” / “Import AI” for quick scheduling.
-                        </p>
+                        )}
+                        {viewMode === "Month" && (
+                            <p className="mt-8 text-sm text-gray-700">
+                                Select a day once to focus it. Click again to open its timeline page, or use “Add Event” / “Import AI” for quick scheduling.
+                            </p>
+                        )}
+                        {viewMode === "Week" && (
+                            <div className="mt-6">
+                                <div className="grid grid-cols-1 md:grid-cols-7 gap-3">
+                                    {weekDates.map(dateStr => {
+                                        const eventsForDay = eventsMap[dateStr] || [];
+                                        const dateObj = new Date(dateStr);
+                                        const label = dateObj.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+                                        return (
+                                            <button
+                                                key={dateStr}
+                                                type="button"
+                                                onClick={() => router.push(`/dashboard/day/${dateStr}/landing`)}
+                                                className="bg-[#fdfaf3] rounded-xl border border-yellow-100 p-3 text-left hover:shadow transition"
+                                            >
+                                                <div className="flex items-center justify-between">
+                                                    <span className="font-semibold text-gray-900">{label}</span>
+                                                    {eventsForDay.length > 0 && <span className="text-xs text-yellow-600">{eventsForDay.length}</span>}
+                                                </div>
+                                                <div className="mt-3 space-y-2 max-h-48 overflow-y-auto">
+                                                    {eventsForDay.map(ev => (
+                                                        <div
+                                                            key={ev.id}
+                                                            className={`text-xs px-2 py-1 rounded border ${
+                                                                ev.completed
+                                                                    ? "bg-white border-gray-200 line-through text-gray-400"
+                                                                    : "bg-white border-yellow-100 text-gray-800"
+                                                            }`}
+                                                        >
+                                                            {ev.start_time ? `${ev.start_time} ` : ""}{ev.title}
+                                                        </div>
+                                                    ))}
+                                                    {eventsForDay.length === 0 && (
+                                                        <p className="text-xs text-gray-500">No events</p>
+                                                    )}
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
                     </section>
 
                     <aside className="w-80 bg-white rounded-2xl shadow-md p-6 flex flex-col">
@@ -649,23 +781,54 @@ export default function DashboardPage() {
                             {upcomingEvents.length === 0 && (
                                 <p className="text-sm text-gray-600">No events yet. Add one to get started!</p>
                             )}
-                            {upcomingEvents.map(({ dateStr, event }) => (
-                                <button
-                                    key={event.id}
-                                    type="button"
-                                    onClick={() => router.push(`/dashboard/day/${dateStr}/landing`)}
-                                    className="w-full text-left bg-[#fff7e6] border border-yellow-100 rounded-xl p-4 shadow-sm transition-transform duration-200 hover:-translate-y-0.5 focus:outline-none"
-                                >
-                                    <div className="text-xs font-semibold text-yellow-700">
-                                        {formatUpcomingDate(dateStr)}{" "}
-                                        {event.start_time ? `• ${event.start_time}` : ""}
+                            {upcomingEvents.map(({ dateStr, event }) => {
+                                const isDone = event.completed;
+                                return (
+                                    <div
+                                        key={event.id}
+                                        className={`w-full text-left border border-yellow-100 rounded-xl p-4 shadow-sm transition-transform duration-200 hover:-translate-y-0.5 focus-within:outline-none ${
+                                            isDone ? "bg-white opacity-70" : "bg-[#fff7e6]"
+                                        }`}
+                                    >
+                                        <button
+                                            type="button"
+                                            onClick={() => router.push(`/dashboard/day/${dateStr}/landing`)}
+                                            className="w-full text-left"
+                                        >
+                                            <div className="text-xs font-semibold text-yellow-700 flex items-center justify-between gap-2">
+                                                <span>
+                                                    {formatUpcomingDate(dateStr)}{" "}
+                                                    {event.start_time ? `• ${event.start_time}` : ""}
+                                                </span>
+                                                {isDone && (
+                                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 uppercase">
+                                                        Done
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className={`mt-1 text-sm font-semibold truncate ${isDone ? "line-through text-gray-500" : "text-gray-900"}`}>
+                                                {event.title}
+                                            </div>
+                                        </button>
+                                        <div className="mt-3 flex items-center justify-between">
+                                            <span className="inline-flex items-center px-2 py-1 text-[11px] rounded-full bg-white border border-yellow-200 text-yellow-800">
+                                                {viewMode}
+                                            </span>
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleEventCompletion(event.id, dateStr, event.completed)}
+                                                className={`text-[11px] font-semibold px-3 py-1 rounded-full border ${
+                                                    isDone
+                                                        ? "border-green-400 text-green-700 bg-green-50"
+                                                        : "border-yellow-300 text-yellow-700 bg-yellow-50"
+                                                }`}
+                                            >
+                                                {isDone ? "Undo" : "Mark done"}
+                                            </button>
+                                        </div>
                                     </div>
-                                    <div className="mt-1 text-sm font-semibold text-gray-900 truncate">{event.title}</div>
-                                    <div className="mt-2 inline-flex items-center px-2 py-1 text-[11px] rounded-full bg-white border border-yellow-200 text-yellow-800">
-                                        {viewMode}
-                                    </div>
-                                </button>
-                            ))}
+                                );
+                            })}
                         </div>
                     </aside>
                 </main>
@@ -731,16 +894,22 @@ export default function DashboardPage() {
                             </div>
                             <div>
                                 <label className="text-sm font-semibold text-gray-800">Category</label>
-                                <select
-                                    className="mt-1 w-full px-4 py-2.5 border border-yellow-200 rounded-lg focus:ring-2 focus:ring-yellow-400 focus:outline-none"
-                                    value={newEventData.category}
-                                    onChange={(e) => setNewEventData(prev => ({ ...prev, category: e.target.value }))}
-                                >
-                                    <option>Work</option>
-                                    <option>Personal</option>
-                                    <option>Meeting</option>
-                                    <option>Other</option>
-                                </select>
+                                <div className="mt-1 relative">
+                                    <select
+                                        className="block w-full appearance-none bg-white px-4 py-2.5 border border-[rgba(74,52,38,0.15)] rounded-lg focus:ring-2 focus:ring-[var(--secondary)] focus:outline-none text-[var(--text)]"
+                                        value={newEventData.category}
+                                        onChange={(e) => setNewEventData(prev => ({ ...prev, category: e.target.value }))}
+                                    >
+                                        <option>Work</option>
+                                        <option>Personal</option>
+                                        <option>Meeting</option>
+                                        <option>Health</option>
+                                        <option>Social</option>
+                                        <option>School</option>
+                                        <option>Occasion</option>
+                                    </select>
+                                    <span className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-[var(--text-light)]">v</span>
+                                </div>
                             </div>
                         </div>
                         <div>
