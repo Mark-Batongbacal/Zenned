@@ -701,7 +701,7 @@ export default function DashboardPage() {
                                                 tabIndex={0}
                                                 onClick={() => router.push(`/dashboard/day/${dateStr}/landing`)}
                                                 onKeyDown={(e) => e.key === "Enter" && router.push(`/dashboard/day/${dateStr}/landing`)}
-                                                className={`upcoming-event cursor-pointer ${isDone ? "opacity-60" : ""}`}
+                                                className={`upcoming-event hover-lift cursor-pointer ${isDone ? "opacity-60" : ""}`}
                                             >
                                                 <div className="event-time">
                                                     {formatUpcomingDate(dateStr)} {event.start_time ? `• ${event.start_time}` : ""}
