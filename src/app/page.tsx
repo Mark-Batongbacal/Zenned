@@ -1,51 +1,105 @@
-// src/app/page.tsx
-import React from 'react';
+"use client";
+
+import React from "react";
+import Link from "next/link";
+import {
+  Bot,
+  Cloud,
+  Menu,
+  RefreshCw,
+  Rocket,
+  Shield,
+  TrendingUp,
+  Zap,
+} from "lucide-react";
+import BrandMark from "@/components/BrandMark";
 
 export default function Home() {
+  const [navOpen, setNavOpen] = React.useState(false);
+
+  const featureCards = [
+    { title: "AI-Powered", description: "Let GPT help you organize your tasks smarter and faster.", icon: Bot },
+    {
+      title: "Cross-Platform",
+      description: (
+        <>
+          Use <BrandMark variant="inline" /> on web, desktop, and mobile.
+        </>
+      ),
+      icon: RefreshCw,
+    },
+    { title: "Productivity Insights", description: "Track your progress and stay on top of deadlines.", icon: TrendingUp },
+  ];
+
   return (
-    <main className="home-landing">
+    <div className="startup-page">
+      <div className="honeycomb-bg" aria-hidden />
+
+      <nav className="navbar">
+        <div className="logo">
+          <BrandMark className="logo-brand" iconSize={60} priority />
+        </div>
+
+        <button
+          className="nav-toggle"
+          aria-label="Toggle navigation"
+          aria-expanded={navOpen}
+          onClick={() => setNavOpen(prev => !prev)}
+        >
+          <Menu size={20} />
+        </button>
+
+        <div className={`nav-links ${navOpen ? "nav-links-open" : ""}`} />
+      </nav>
+
       <section className="hero">
-        <span className="hero-pill">Plan smarter, feel calmer</span>
-        <h1 className="hero-title">Zenned</h1>
-        <p className="hero-subtitle">
-          Your cross-platform AI scheduler powered by GPT. Capture ideas, balance your day, and
-          keep every commitment without losing your calm.
+        <p className="hero-pill">
+          <Zap size={16} /> AI-Powered Hive for Your Day
         </p>
-        <div className="hero-actions">
-          <a href="/login" className="btn btn-primary">Get Started</a>
-          <a href="/signup" className="btn btn-secondary">Create Account</a>
+
+        <h1>Organize Your Work, Amplify Your Productivity.</h1>
+
+        <p className="hero-subtitle">
+          <BrandMark variant="inline" /> is your AI calendar and task hive powered by GPT – helping you plan, prioritize,
+          and keep every commitment in perfect flow across web, desktop, and mobile.
+        </p>
+
+        <div className="cta-buttons">
+          <Link href="/login" className="btn btn-primary">
+            <Rocket size={18} /> Get Started
+          </Link>
+        </div>
+
+        <div className="hero-highlights">
+          <span>
+            <Zap size={16} /> 2x faster planning
+          </span>
+          <span>
+            <Cloud size={16} /> Syncs across devices
+          </span>
+          <span>
+            <Shield size={16} /> Your data, protected
+          </span>
+        </div>
+
+        <div id="features" className="features">
+          {featureCards.map(card => (
+            <article key={card.title} className="card">
+              <div className="card-icon">
+                <card.icon size={22} />
+              </div>
+              <h3>{card.title}</h3>
+              <p>{card.description}</p>
+            </article>
+          ))}
         </div>
       </section>
 
-      <section className="feature-grid">
-        {[
-          {
-            title: "AI-Powered",
-            body: "Let GPT translate your notes and inbox into a prioritized day plan.",
-          },
-          {
-            title: "Cross-Platform",
-            body: "Use Zenned on web, desktop, and mobile with seamless sync.",
-          },
-          {
-            title: "Productivity Insights",
-            body: "Track habits, energy, and focus without spreadsheets.",
-          },
-        ].map((card) => (
-          <article key={card.title} className="feature-card">
-            <h3>{card.title}</h3>
-            <p>{card.body}</p>
-          </article>
-        ))}
-      </section>
-
-      <section className="cta-strip">
-        <div>
-          <h4>Ready to get Zenned?</h4>
-          <p>Tap into calmer planning and let AI carry the busy-work.</p>
-        </div>
-        <a href="/login" className="btn btn-primary">Start Now</a>
-      </section>
-    </main>
+      <footer className="footer">
+        <p>
+          &copy; {new Date().getFullYear()} <BrandMark variant="inline" />. All rights reserved.
+        </p>
+      </footer>
+    </div>
   );
 }

@@ -15,6 +15,7 @@ import { Trash2, CheckCircle2, Circle } from "lucide-react";
 
 const MINUTES_IN_DAY = 24 * 60;
 const SLOT_MINUTES = 15;
+const TIMELINE_EVENT_OFFSET = 120;
 
 const snapToSlot = (value: number) => Math.round(value / SLOT_MINUTES) * SLOT_MINUTES;
 
@@ -62,6 +63,18 @@ export default function DayLandingPage() {
   const date = params?.date as string;
 
   const [events, setEvents] = useState<Event[]>([]);
+  const selectedDate = React.useMemo(() => {
+    if (!date) return null;
+    const parsed = new Date(date);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }, [date]);
+  const friendlyDate = React.useMemo(() => {
+    if (!selectedDate) return { weekday: "", full: "" };
+    return {
+      weekday: selectedDate.toLocaleDateString(undefined, { weekday: "long" }),
+      full: selectedDate.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" }),
+    };
+  }, [selectedDate]);
   const [userId, setUserId] = useState<number | null>(() => {
     try {
       const uid = localStorage.getItem("userId");
@@ -70,9 +83,6 @@ export default function DayLandingPage() {
       return null;
     }
   });
-
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [eventToDelete, setEventToDelete] = useState<Event | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 0 } })
@@ -99,15 +109,22 @@ export default function DayLandingPage() {
           }[] = await res.json();
 
           const filtered = allEvents
-            .filter((e) => e.event_date.slice(0, 10) === date)
-            .map((e) => ({
-              id: e.id,
-              title: e.title,
-              date: e.event_date.slice(0, 10),
-              start_time: e.start_time,
-              end_time: e.end_time,
-              completed: e.completed,
-            }));
+            .filter((e) => {
+              const rawDate = e.event_date ?? (e as any)?.date ?? null;
+              if (!rawDate) return false;
+              return String(rawDate).slice(0, 10) === date;
+            })
+            .map((e) => {
+              const rawDate = e.event_date ?? (e as any)?.date ?? "";
+              return {
+                id: e.id,
+                title: e.title,
+                date: String(rawDate).slice(0, 10),
+                start_time: e.start_time,
+                end_time: e.end_time,
+                completed: e.completed,
+              };
+            });
           setEvents(filtered);
         } catch (err) {
           console.error("Error loading day events:", err);
@@ -133,6 +150,26 @@ export default function DayLandingPage() {
     const updated = { ...ev, completed: !ev.completed };
     applyEventUpdate(updated, true, { completed: updated.completed });
   };
+
+  const sortedEvents = React.useMemo(() => {
+    return [...events].sort(
+      (a, b) => timeToMinutes(a.start_time || "00:00") - timeToMinutes(b.start_time || "00:00")
+    );
+  }, [events]);
+  const completedCount = events.filter((ev) => ev.completed).length;
+  const nextEvent = sortedEvents.find((ev) => !ev.completed);
+  const timelineNow = React.useMemo(() => {
+    if (!selectedDate) return null;
+    const today = new Date();
+    if (today.toDateString() !== selectedDate.toDateString()) return null;
+    return today.getHours() * 60 + today.getMinutes();
+  }, [selectedDate]);
+  const timelineNowLabel = React.useMemo(() => {
+    if (timelineNow == null) return "";
+    const hours = Math.floor(timelineNow / 60);
+    const minutes = timelineNow % 60;
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  }, [timelineNow]);
 
   const applyEventUpdate = (
     updatedEv: Event,
@@ -175,16 +212,15 @@ export default function DayLandingPage() {
     }
   };
 
-  // Delete
-  const handleDelete = async () => {
-    if (!eventToDelete) return;
+  const deleteEvent = async (target: Event) => {
+    const id = target.id;
 
     try {
       if (userId) {
         const res = await fetch("/api/events", {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId, id: eventToDelete.id }),
+          body: JSON.stringify({ userId, id }),
         });
         if (!res.ok) {
           console.error("Failed to delete event:", await res.text());
@@ -195,15 +231,13 @@ export default function DayLandingPage() {
         if (raw) {
           const map = JSON.parse(raw);
           if (map[date]) {
-            map[date] = map[date].filter((e: Event) => e.id !== eventToDelete.id);
+            map[date] = map[date].filter((e: Event) => e.id !== id);
             localStorage.setItem("events", JSON.stringify(map));
           }
         }
       }
 
-      setEvents((prev) => prev.filter((e) => e.id !== eventToDelete.id));
-      setConfirmOpen(false);
-      setEventToDelete(null);
+      setEvents((prev) => prev.filter((e) => e.id !== id));
     } catch (err) {
       console.error("Delete failed:", err);
     }
@@ -228,110 +262,140 @@ export default function DayLandingPage() {
 
 
   return (
-    <div className="min-h-screen flex flex-col items-center bg-gradient-to-b from-[var(--background)] to-[var(--accent)] px-6 py-10 text-[var(--text)]">
-      <div className="w-full max-w-4xl">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <p className="text-sm uppercase tracking-wide text-[var(--text-light)]">Daily Timeline</p>
-            <h1 className="text-3xl font-bold">Events for {date}</h1>
+    <div className="day-page">
+      <div className="day-honeycomb" aria-hidden />
+      <div className="day-content">
+        <section className="day-card day-hero">
+          <div className="day-hero__text">
+            <p className="day-pill">Day Planner</p>
+            <h1>
+              {friendlyDate.weekday ? `${friendlyDate.weekday}, ` : ""}
+              {friendlyDate.full || date || "Today"}
+            </h1>
+            <p>
+              {events.length > 0
+                ? `You have ${events.length} ${events.length === 1 ? "commitment" : "commitments"} scheduled today.`
+                : "No events yet. Head back to the dashboard to schedule your first task."}
+            </p>
           </div>
-          <button
-            onClick={() => router.push("/dashboard")}
-            className="px-5 py-2 rounded-full bg-[var(--primary)] text-[var(--text)] font-semibold shadow transition-transform duration-200 hover:-translate-y-0.5"
-          >
-            Back to Calendar
-          </button>
-        </div>
+          <div className="day-hero__actions">
+            <button className="zen-btn zen-btn--secondary" onClick={() => router.push("/dashboard")}>
+              Back to Calendar
+            </button>
+            <button className="zen-btn zen-btn--primary" onClick={() => router.push("/dashboard?view=day")}>
+              Open Dashboard
+            </button>
+          </div>
+          <div className="day-stats">
+            {[
+              { label: "Total Events", value: events.length },
+              { label: "Completed", value: completedCount },
+              { label: "Remaining", value: Math.max(events.length - completedCount, 0) },
+              { label: "Next", value: nextEvent ? nextEvent.title : "No upcoming" },
+            ].map((stat) => (
+              <article key={stat.label} className="day-stat">
+                <p>{stat.label}</p>
+                <h3>{stat.value || stat.value === 0 ? stat.value : "—"}</h3>
+              </article>
+            ))}
+          </div>
+        </section>
 
-        <div className="relative bg-[var(--surface)] border border-[rgba(255,179,0,0.35)] shadow-xl rounded-3xl h-[1440px] overflow-hidden">
-          {/* Hour labels */}
-          {[...Array(24)].map((_, hour) => (
-            <div
-              key={hour}
-              className="absolute left-0 right-0 h-[60px] text-xs px-4 z-30 pointer-events-none flex items-start text-[var(--text-light)]"
-              style={{
-                top: `${hour * 60}px`,
-                borderLeft: "1px solid rgba(0,0,0,0.05)",
-                borderRight: "1px solid rgba(0,0,0,0.05)",
-                borderTop: hour === 0 ? "1px solid rgba(0,0,0,0.05)" : "none",
-                borderBottom: "1px solid rgba(0,0,0,0.05)",
-              }}
-            >
-              {hour}:00
-            </div>
-          ))}
-
-          {/* 15-minute dotted lines */}
-          {[...Array(24 * 4)].map((_, i) => (
-            <div
-              key={`dot-${i}`}
-              className="absolute left-0 right-0 border-t border-dotted border-[rgba(0,0,0,0.08)] z-0 pointer-events-none"
-              style={{ top: `${i * 15}px` }}
-            />
-          ))}
-
-          <DndContext
-            sensors={sensors}
-            modifiers={[restrictToVerticalAxis]}
-            onDragEnd={handleDragEnd}
-          >
-            {events.map((ev) => {
-              if (!ev.start_time || !ev.end_time) return null;
-              const [startH, startM] = ev.start_time.split(":").map(Number);
-              const [endH, endM] = ev.end_time.split(":").map(Number);
-              const top = startH * 60 + startM;
-              const height = endH * 60 + endM - top;
-              return (
-                <DraggableEvent
-                  key={ev.id}
-                  ev={ev}
-                  top={top}
-                  height={height}
-                  events={events}
-                  setEventToDelete={setEventToDelete}
-                  setConfirmOpen={setConfirmOpen}
-                  updateEvent={applyEventUpdate}
-                  onToggleComplete={toggleCompletion}
-                />
-              );
-            })}
-
-          </DndContext>
-
-        </div>
-
-        {/* Delete modal */}
-        {confirmOpen && eventToDelete && (
-          <div
-            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-200"
-            onClick={() => setConfirmOpen(false)}
-          >
-            <div
-              className="bg-white rounded-lg shadow-lg w-96 p-6 relative"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <h2 className="text-xl font-semibold mb-3 text-gray-900">Delete Event</h2>
-              <p className="text-gray-700 mb-6">
-                Are you sure you want to delete{" "}
-                <span className="font-semibold text-black">"{eventToDelete.title}"</span>?
-              </p>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setConfirmOpen(false)}
-                  className="px-4 py-2 rounded-full bg-[var(--accent)] text-[var(--text)] font-semibold hover:bg-[var(--secondary)] transition"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleDelete}
-                  className="px-4 py-2 rounded-full bg-red-500 text-white font-semibold hover:bg-red-600 z-100 transition"
-                >
-                  <Trash2 size={16} />
-                </button>
+        <div className="day-main-grid">
+          <section className="day-card day-timeline">
+            <header>
+              <div>
+                <p className="day-pill day-pill--soft">Visual Timeline</p>
+                <h2>Drag to plan your day</h2>
               </div>
+              <div className="day-chip">
+                {timelineNow != null ? `Current time · ${timelineNowLabel}` : "Plan ahead"}
+              </div>
+            </header>
+
+            <div className="day-timeline__canvas">
+              {[...Array(24)].map((_, hour) => (
+                <div key={hour} className="day-hour-row" style={{ top: `${hour * 60}px` }}>
+                  {hour}:00
+                </div>
+              ))}
+
+              {[...Array(24 * 4)].map((_, i) => (
+                <div key={`dot-${i}`} className="day-quarter-row" style={{ top: `${i * 15}px` }} />
+              ))}
+
+              {timelineNow != null && (
+                <div className="day-now-indicator" style={{ top: `${timelineNow}px` }}>
+                  <span>Now</span>
+                </div>
+              )}
+
+              <DndContext sensors={sensors} modifiers={[restrictToVerticalAxis]} onDragEnd={handleDragEnd}>
+                {events.map((ev) => {
+                  if (!ev.start_time || !ev.end_time) return null;
+                  const [startH, startM] = ev.start_time.split(":").map(Number);
+                  const [endH, endM] = ev.end_time.split(":").map(Number);
+                  const top = startH * 60 + startM;
+                  const height = endH * 60 + endM - top;
+                  return (
+                    <DraggableEvent
+                      key={ev.id}
+                      ev={ev}
+                      top={top}
+                      height={height}
+                      events={events}
+                      updateEvent={applyEventUpdate}
+                      onToggleComplete={toggleCompletion}
+                      onDelete={deleteEvent}
+                    />
+                  );
+                })}
+              </DndContext>
             </div>
-          </div>
-        )}
+          </section>
+
+          <aside className="day-card day-checklist">
+            <header>
+              <div>
+                <p className="day-pill day-pill--soft">Today&apos;s focus</p>
+                <h3>Event checklist</h3>
+              </div>
+              <span className="day-chip">
+                {completedCount}/{events.length || 0} done
+              </span>
+            </header>
+
+            <div className="day-checklist__body">
+              {sortedEvents.length === 0 && (
+                <p className="day-empty-state">
+                  No events scheduled. Jump back to the dashboard to add your first.
+                </p>
+              )}
+
+              {sortedEvents.map((eventItem) => (
+                <article
+                  key={eventItem.id}
+                  className={`day-checklist__item ${eventItem.completed ? "day-checklist__item--done" : ""}`}
+                >
+                  <div>
+                    <h4>{eventItem.title}</h4>
+                    <span>
+                      {eventItem.start_time || "--:--"} - {eventItem.end_time || "--:--"}
+                    </span>
+                  </div>
+                  <div className="day-checklist__actions">
+                    <button className="zen-btn zen-btn--muted" onClick={() => toggleCompletion(eventItem)}>
+                      {eventItem.completed ? "Undo" : "Complete"}
+                    </button>
+                    <button className="zen-btn zen-btn--ghost" onClick={() => deleteEvent(eventItem)}>
+                      Delete
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </aside>
+        </div>
       </div>
     </div>
   );
@@ -343,10 +407,9 @@ type DraggableEventProps = {
   top: number;
   height: number;
   events: Event[];
-  setEventToDelete: React.Dispatch<React.SetStateAction<Event | null>>;
-  setConfirmOpen: React.Dispatch<React.SetStateAction<boolean>>;
   updateEvent: (updatedEv: Event, persist?: boolean, fields?: Partial<Pick<Event, "start_time" | "end_time" | "completed">>) => void;
   onToggleComplete: (ev: Event) => void;
+  onDelete: (ev: Event) => void;
 };
 
 function DraggableEvent({
@@ -354,10 +417,9 @@ function DraggableEvent({
   top,
   height,
   events,
-  setEventToDelete,
-  setConfirmOpen,
   updateEvent,
-  onToggleComplete
+  onToggleComplete,
+  onDelete
 }: DraggableEventProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: ev.id.toString(),
@@ -429,8 +491,8 @@ function DraggableEvent({
     position: "absolute",
     top: top,
     height: height,
-    left: 60,
-    right: 2,
+    left: TIMELINE_EVENT_OFFSET,
+    right: 16,
     zIndex: isDragging ? 50 : 31,
     transform: `translate3d(0, ${Math.round(clampedY / 15) * 15}px, 0)`,
     opacity: isDone ? 0.65 : 1,
@@ -441,45 +503,29 @@ function DraggableEvent({
       ref={setNodeRef}
       {...listeners}
       {...attributes}
-      className="relative rounded shadow cursor-grab overflow-visible"
+      className={`day-event ${isDone ? "day-event--done" : ""} ${isDragging ? "day-event--dragging" : ""}`}
       style={style}
     >
-      {/* Resize handles */}
-      <div
-        className="absolute left-2 right-2 top-0 h-2 z-50 cursor-n-resize"
-        onPointerDown={handleResizeStart("start")}
-      >
-        <div className="w-full h-full rounded bg-[var(--secondary)]" />
-      </div>
-      <div
-        className="absolute left-2 right-2 bottom-0 h-2 z-50 cursor-s-resize"
-        onPointerDown={handleResizeStart("end")}
-      >
-        <div className="w-full h-full rounded bg-[var(--secondary)]" />
-      </div>
+      <div className="day-event__handle day-event__handle--top" onPointerDown={handleResizeStart("start")} />
+      <div className="day-event__handle day-event__handle--bottom" onPointerDown={handleResizeStart("end")} />
 
-      {/* Full-height background under the grid lines */}
-      <div className={`absolute inset-0 rounded border border-[rgba(74,52,38,0.08)] ${isDone ? "bg-white" : "bg-[var(--accent)] opacity-90"}`} />
-
-      {/* Middle box containing text + button, above grid lines */}
-      <div className="relative z-40 flex justify-between items-center gap-2 px-2 py-1 bg-[var(--surface)] rounded shadow-sm border border-[rgba(74,52,38,0.08)]">
+      <div className="day-event__body">
         <button
           onClick={() => onToggleComplete(ev)}
-          className="text-[var(--text)] hover:text-green-600 transition"
+          className="day-event__toggle"
           aria-label={isDone ? "Mark as not done" : "Mark as done"}
         >
           {isDone ? <CheckCircle2 size={18} /> : <Circle size={18} />}
         </button>
-        <span className={`font-semibold truncate flex-1 ${isDone ? "line-through text-[var(--text-light)]" : "text-[var(--text)]"}`}>{ev.title}</span>
-        <span className="text-xs ml-2 flex-shrink-0 text-[var(--text-light)]">
-          {ev.start_time} - {ev.end_time}
-        </span>
+        <div className="day-event__details">
+          <span className="day-event__title">{ev.title}</span>
+          <span className="day-event__time">
+            {ev.start_time} - {ev.end_time}
+          </span>
+        </div>
         <button
-          onClick={() => {
-            setEventToDelete(ev);
-            setConfirmOpen(true);
-          }}
-          className="ml-2 px-2 py-0.5 bg-[var(--primary)] text-black text-xs rounded hover:bg-red-500 flex-shrink-0"
+          onClick={() => onDelete(ev)}
+          className="day-event__delete"
         >
           <Trash2 size={16} />
         </button>

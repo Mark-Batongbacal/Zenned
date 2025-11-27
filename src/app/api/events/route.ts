@@ -17,6 +17,30 @@ async function getConnection() {
   return mysql.createConnection(getConnOptions());
 }
 
+async function ensureEventsTable(conn: any, tableName: string) {
+  await conn.execute(
+    `CREATE TABLE IF NOT EXISTS \`${tableName}\` (
+         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+         title VARCHAR(255) NOT NULL,
+         event_date DATE DEFAULT NULL,
+         start_time TIME DEFAULT NULL,
+         end_time TIME DEFAULT NULL,
+         completed TINYINT(1) NOT NULL DEFAULT 0,
+         description TEXT DEFAULT NULL,
+         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+  );
+  await conn.execute(
+    `ALTER TABLE \`${tableName}\` ADD COLUMN completed TINYINT(1) NOT NULL DEFAULT 0`,
+  ).catch(() => {});
+  await conn.execute(
+    `ALTER TABLE \`${tableName}\` ADD COLUMN description TEXT DEFAULT NULL`,
+  ).catch(() => {});
+  await conn.execute(
+    `ALTER TABLE \`${tableName}\` MODIFY COLUMN event_date DATE NULL`,
+  ).catch(() => {});
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const userIdRaw = url.searchParams.get("userId");
@@ -31,23 +55,10 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Invalid userId" }, { status: 400 });
     }
 
-    await conn.execute(
-      `CREATE TABLE IF NOT EXISTS \`${tableName}\` (
-         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-         title VARCHAR(255) NOT NULL,
-         event_date DATE NOT NULL,
-         start_time TIME DEFAULT NULL,
-         end_time TIME DEFAULT NULL,
-         completed TINYINT(1) NOT NULL DEFAULT 0,
-         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
-    );
-    await conn.execute(
-      `ALTER TABLE \`${tableName}\` ADD COLUMN completed TINYINT(1) NOT NULL DEFAULT 0`,
-    ).catch(() => {});
+    await ensureEventsTable(conn, tableName);
 
     const [rows]: any = await conn.execute(
-      `SELECT id, title, event_date, start_time, end_time, completed FROM \`${tableName}\` ORDER BY event_date, start_time, id`
+      `SELECT id, title, event_date, start_time, end_time, completed, description, created_at FROM \`${tableName}\` ORDER BY event_date, start_time, id`
     );
     return NextResponse.json(rows);
   } catch (err: any) {
@@ -131,9 +142,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { userId, title, date, startTime, endTime, completed } = body || {};
+  const { userId, title, date, startTime, endTime, completed, description, noteOnly } = body || {};
   const uid = userId ? Number(userId) : null;
-  if (!uid || !title || !date) return NextResponse.json({ error: "userId, title, and date required" }, { status: 400 });
+  if (!uid) return NextResponse.json({ error: "userId required" }, { status: 400 });
+
+  const isNoteOnly = noteOnly === true;
+  const normalizedTitle = typeof title === "string" ? title.trim() : "";
+  const normalizedDescription = typeof description === "string" ? description.trim() : "";
+
+  const resolvedTitle = normalizedTitle || (normalizedDescription ? normalizedDescription.slice(0, 60) : "");
+  if (!resolvedTitle) return NextResponse.json({ error: "title or description required" }, { status: 400 });
+
+  if (!isNoteOnly && !date) {
+    return NextResponse.json({ error: "date required for events" }, { status: 400 });
+  }
 
   let conn;
   try {
@@ -143,24 +165,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid userId" }, { status: 400 });
     }
 
-    await conn.execute(
-      `CREATE TABLE IF NOT EXISTS \`${tableName}\` (
-         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-         title VARCHAR(255) NOT NULL,
-         event_date DATE NOT NULL,
-         start_time TIME DEFAULT NULL,
-         end_time TIME DEFAULT NULL,
-         completed TINYINT(1) NOT NULL DEFAULT 0,
-         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
-    );
-    await conn.execute(
-      `ALTER TABLE \`${tableName}\` ADD COLUMN completed TINYINT(1) NOT NULL DEFAULT 0`,
-    ).catch(() => {});
+    await ensureEventsTable(conn, tableName);
 
     const [result]: any = await conn.execute(
-      `INSERT INTO \`${tableName}\` (title, event_date, start_time, end_time, completed) VALUES (?, ?, ?, ?, ?)`,
-      [String(title).slice(0, 255), date, startTime ?? null, endTime ?? null, completed ? 1 : 0]
+      `INSERT INTO \`${tableName}\` (title, event_date, start_time, end_time, completed, description) VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        resolvedTitle.slice(0, 255),
+        isNoteOnly ? null : date,
+        isNoteOnly ? null : (startTime ?? null),
+        isNoteOnly ? null : (endTime ?? null),
+        completed ? 1 : 0,
+        normalizedDescription || null,
+      ]
     );
 
     return NextResponse.json({ insertedId: result.insertId });

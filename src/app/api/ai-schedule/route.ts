@@ -2,31 +2,27 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import util from "util";
 
-const systemPrompt = `
-I have the following tasks with deadlines or priorities:
+function buildSystemPrompt(todayLabel: string, anchorDate: string) {
+  return `
+You are a proactive scheduling assistant. Today is ${todayLabel}. Use ${anchorDate} as the reference date for “today” unless the user explicitly states another baseline. The very first scheduled line must match the earliest requested day (default: ${anchorDate}) exactly.
 
-{{task_list}}
+Create a chronological schedule that can span multiple weeks—or move backward if the user mentions prep periods like “a week before” or “the day before.” Use this exact line-based format and continue repeating the day headings (Sun, Mon, Tue, Wed, Thu, Fri, Sat) in order as many times as needed. Every line MUST show the real ISO date for that day immediately after the day label:
 
-Today is {{today}}.
-
-Create a **7-day weekly schedule** strictly in this format:
-
-'Sun/Slot1 (HH:MM-HH:MM)/Slot2 (HH:MM-HH:MM)/.../SlotN (HH:MM-HH:MM)\\n' +
-'Mon/Slot1 (HH:MM-HH:MM)/Slot2 (HH:MM-HH:MM)/.../SlotN (HH:MM-HH:MM)\\n' +
-'Tue/Slot1 (HH:MM-HH:MM)/Slot2 (HH:MM-HH:MM)/.../SlotN (HH:MM-HH:MM)\\n' +
-... etc for Wed, Thu, Fri, Sat
+'Sun (YYYY-MM-DD)/Task name :: short description (HH:MM-HH:MM)/Next task :: short description (HH:MM-HH:MM)/.../Last task :: short description (HH:MM-HH:MM)
+Mon (YYYY-MM-DD)/Task name :: short description (HH:MM-HH:MM)/...'
 
 Rules:
-1. Include a **start and end time for every slot**, in 24-hour format HH:MM-HH:MM.
-2. Empty slots can be a single space or skipped (keep '/' separators).
-3. Include creative scheduling: breaks, Pomodoro sessions, focus bursts, etc.
-4. Adapt to my style: I am a {{user_type}} (e.g., "night owl", "morning person").
-5. Prioritize tasks by urgency, deadlines, and complexity.
-6. Output **only the schedule string**, plain text, no explanations.
-7. Strictly follow the format: day first, then slots, with '/' separators, ending each day with '\\n'.
-8. DO NOT USE DAYS NOT MENTIONED.
-9. DO NOT REPEAT '\\n' or quotes.
+1. Always include start and end times in 24-hour HH:MM-HH:MM format for every slot.
+2. Separate each slot’s task name and its one-sentence description with “ :: ” (two colons with spaces).
+3. If a day has no slots, keep the day header with its date and leave it blank after the slash.
+4. The ISO date must track real calendar days in chronological order and may never skip backwards. To plan “week before” or “day before,” subtract 7 or 1 day from ${anchorDate} (or the relevant day) and keep going sequentially.
+5. Explicitly verify each line’s ISO date matches the intended weekday (Mon label must show a date that really is a Monday, etc.).
+6. Unless the user explicitly asks for a single block, spread the work across the entire day (morning/afternoon/evening) so a “review day” or intensive period has multiple sessions with breaks.
+7. Each task name must be meaningful (e.g., “Chemistry mock exam review”, “Deep work sprint for launch copy”) and may never be a generic placeholder like “Slot1” or “Task A”.
+8. Use only plain text—no explanations, quotes, markdown, or extra whitespace.
+9. Keep the output strictly to the specified format, one line per day label.
 `;
+}
 
 
 function collectStrings(v: any, out: string[] = []) {
@@ -125,8 +121,13 @@ export async function POST(req: Request) {
   })();
   console.debug("[ai-schedule] parsed body:", util.inspect(body, { depth: 2 }));
 
-  const prompt = body?.prompt + "DO NOT USE QUOTATIONS PLEASE, do not repeat \\n's and follow the exact format mentioned.";
-  if (!prompt) return NextResponse.json({ error: "prompt required" }, { status: 400 });
+  const todayLabel = new Date().toISOString().slice(0, 10);
+  const userPrompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
+  if (!userPrompt) return NextResponse.json({ error: "prompt required" }, { status: 400 });
+  const requestedAnchorRaw = typeof body?.anchorDate === "string" ? body.anchorDate.trim() : "";
+  const anchorDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedAnchorRaw) ? requestedAnchorRaw : todayLabel;
+  const extraInstructions = `\n\nCurrent calendar date: ${todayLabel}. Expand and distribute the plan across every timeframe the user mentions (e.g., “week before”, “day before”, “starting today”) while keeping ISO dates accurate and sequential. The first day should default to ${anchorDate} unless the user demands a different baseline, and any mentions of “week/day before/after” must shift the dates accordingly. Each active day should have multiple sessions (morning, afternoon, evening) unless the user insists otherwise. For each slot, provide a short descriptive phrase using “ :: ” before the (HH:MM-HH:MM) timing and use a meaningful task title derived from the user’s prompt (never placeholders like “Slot1”). DO NOT USE QUOTATIONS PLEASE, do not repeat \\n's and follow the exact format mentioned.`;
+  const prompt = userPrompt + extraInstructions;
 
   const apiKey = process.env.NVIDIA_API_KEY || "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";
   if (!apiKey) {
@@ -146,7 +147,7 @@ export async function POST(req: Request) {
     const resp = await client.chat.completions.create({
       model: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
       messages: [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: buildSystemPrompt(todayLabel, anchorDate) },
         { role: "user", content: prompt },
       ],
       temperature: 0,

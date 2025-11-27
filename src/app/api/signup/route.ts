@@ -30,11 +30,13 @@ export async function POST(req: Request) {
           email VARCHAR(255) NOT NULL UNIQUE,
           name VARCHAR(255) NULL,
           password_hash VARCHAR(255) NOT NULL,
+          dark_mode TINYINT(1) NOT NULL DEFAULT 0,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
       )
       .catch(() => {});
     await connection.execute("ALTER TABLE users ADD COLUMN name VARCHAR(255) NULL", []).catch(() => {});
+    await connection.execute("ALTER TABLE users ADD COLUMN dark_mode TINYINT(1) NOT NULL DEFAULT 0", []).catch(() => {});
 
     const [rows]: any = await connection.execute("SELECT id FROM users WHERE email = ?", [email]);
     if (Array.isArray(rows) && rows.length > 0) {
@@ -45,7 +47,7 @@ export async function POST(req: Request) {
     const hashedPassword = await bcrypt.hash(password, 10);
     const cleanName = name ? String(name).slice(0, 255) : null;
     const [insertResult]: any = await connection.execute(
-      "INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)",
+      "INSERT INTO users (email, name, password_hash, dark_mode) VALUES (?, ?, ?, 0)",
       [email, cleanName, hashedPassword]
     );
     const userId = insertResult && insertResult.insertId;
